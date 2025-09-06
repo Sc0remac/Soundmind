@@ -1,0 +1,8 @@
+# Node / macOS
+node_modules
+.DS_Store
+
+# Env files
+.env
+.env.*
+!.env.example
