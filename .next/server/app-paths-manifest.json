@@ -1,7 +1,10 @@
 {
-  "/page": "app/page.js",
+  "/_not-found/page": "app/_not-found/page.js",
   "/profile/page": "app/profile/page.js",
-  "/api/spotify/callback/route": "app/api/spotify/callback/route.js",
-  "/api/spotify/my/attach/route": "app/api/spotify/my/attach/route.js",
-  "/api/spotify/start/route": "app/api/spotify/start/route.js"
+  "/page": "app/page.js",
+  "/api/spotify/my/reset-cursor/route": "app/api/spotify/my/reset-cursor/route.js",
+  "/api/spotify/my/sync/route": "app/api/spotify/my/sync/route.js",
+  "/music/page": "app/music/page.js",
+  "/api/music/list/route": "app/api/music/list/route.js",
+  "/insights/page": "app/insights/page.js"
 }

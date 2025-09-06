@@ -1,27 +1,17 @@
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
-import { ENV } from "@/lib/env";
 
-const SCOPE = ["user-read-recently-played", "user-top-read"].join(" ");
+export async function GET(req: Request) {
+  const base = process.env.APP_BASE_URL || new URL(req.url).origin;
+  const redirect = process.env.SPOTIFY_REDIRECT_URI || `${base}/api/spotify/callback`;
+  const scope = ["user-read-recently-played", "user-top-read"].join(" ");
 
-function randomState(len = 16) {
-  const cs = "abcdefghijklmnopqrstuvwxyz0123456789";
-  let s = "";
-  for (let i = 0; i < len; i++) s += cs[Math.floor(Math.random() * cs.length)];
-  return s;
-}
+  const u = new URL("https://accounts.spotify.com/authorize");
+  u.searchParams.set("client_id", process.env.SPOTIFY_CLIENT_ID!);
+  u.searchParams.set("response_type", "code");
+  u.searchParams.set("redirect_uri", redirect);
+  u.searchParams.set("scope", scope);
+  u.searchParams.set("state", Math.random().toString(36).slice(2));
+  u.searchParams.set("show_dialog", "true"); // force the page to appear
 
-export async function GET() {
-  const state = randomState();
-  cookies().set("sp_state", state, { httpOnly: true, sameSite: "lax", path: "/", maxAge: 600 });
-
-  const url = new URL("https://accounts.spotify.com/authorize");
-  url.searchParams.set("response_type", "code");
-  url.searchParams.set("client_id", ENV.SPOTIFY_CLIENT_ID);
-  url.searchParams.set("scope", SCOPE);
-  url.searchParams.set("redirect_uri", ENV.SPOTIFY_REDIRECT_URI);
-  url.searchParams.set("state", state);
-  url.searchParams.set("show_dialog", "true");
-
-  return NextResponse.redirect(url, 302);
+  return NextResponse.redirect(u);
 }

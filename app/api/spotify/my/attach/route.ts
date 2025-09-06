@@ -1,105 +1,102 @@
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
-import { requireUserFromRequest } from "@/lib/auth";
-import { supabaseServer } from "@/lib/supabaseServer";
+import { cookies, headers } from "next/headers";
+import { createClient } from "@supabase/supabase-js";
 
-function parseScopes(scope: string | null): string[] {
-  if (!scope) return [];
-  return scope.split(/[,\s]+/).map(s => s.trim()).filter(Boolean);
+function getBearer(): string | null {
+  const h = headers();
+  const a = h.get("authorization") || h.get("Authorization") || "";
+  const m = a.match(/^Bearer\s+(.+)$/i);
+  return m ? m[1] : null;
 }
+const toScopeArray = (s: string | null) =>
+  (s || "").split(/\s+/).map(x => x.trim()).filter(Boolean);
 
-export async function POST(req: Request) {
-  const auth = await requireUserFromRequest(req);
-  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
-  const user = auth.user;
+export async function POST() {
+  try {
+    const c = cookies();
+    const access = c.get("sp_access_token_tmp")?.value || null;
+    const refresh = c.get("sp_refresh_token_tmp")?.value || null;
+    const expIn = Number(c.get("sp_expires_in_tmp")?.value || "0");
+    const scopeStr = c.get("sp_scope_tmp")?.value || "";
+    let spUser = c.get("sp_user_tmp")?.value || "";
 
-  const c = cookies();
-  const access = c.get("sp_raw_access")?.value || "";
-  const refresh = c.get("sp_raw_refresh")?.value || "";
-  const scopeRaw = c.get("sp_scope_tmp")?.value || "";
-  const expiresIn = Number(c.get("sp_expires_in_tmp")?.value || "3600");
-  const spotifyUserId = c.get("sp_user_tmp")?.value || null;
-
-  // If no cookies but account exists, accept (idempotent attach)
-  const existing = await supabaseServer
-    .from("spotify_accounts")
-    .select("user_id")
-    .eq("user_id", user.id)
-    .maybeSingle();
-
-  if (!access) {
-    if (existing.data) {
-      await supabaseServer.from("profiles").update({ spotify_connected: true }).eq("id", user.id);
-      return NextResponse.json({ ok: true, note: "Already attached" });
+    if (!access || !refresh || !expIn) {
+      return NextResponse.json({ error: "Missing temporary OAuth cookies" }, { status: 400 });
     }
-    return NextResponse.json({ error: "Missing OAuth tokens" }, { status: 400 });
-  }
 
-  const expires_at = Math.floor(Date.now() / 1000) + (Number.isFinite(expiresIn) ? expiresIn : 3600);
+    // If we didn't manage to store user id during callback, fetch it now.
+    if (!spUser) {
+      const meRes = await fetch("https://api.spotify.com/v1/me", {
+        headers: { Authorization: `Bearer ${access}` }
+      });
+      if (meRes.status === 401) {
+        // Token not valid; clear cookies to force a clean re-auth
+        ["sp_access_token_tmp","sp_refresh_token_tmp","sp_expires_in_tmp","sp_scope_tmp","sp_user_tmp"]
+          .forEach((n) => c.set(n, "", { path: "/", httpOnly: true, sameSite: "lax", maxAge: 0 }));
+        return NextResponse.json({ error: "Spotify token invalid; please reconnect." }, { status: 401 });
+      }
+      const me = await meRes.json().catch(() => ({}));
+      spUser = me?.id || "";
+    }
 
-  // Upsert token bundle (scope stored as text)
-  const up1 = await supabaseServer.from("spotify_accounts").upsert({
-    user_id: user.id,
-    spotify_user_id: spotifyUserId,
-    access_token: access,
-    refresh_token: refresh,
-    scope: scopeRaw,
-    expires_at,
-    connected_at: new Date().toISOString()
-  });
-  if (up1.error) {
-    const msg = up1.error.message || "attach failed";
-    // Retry without connected_at if schema cache/type glitch
-    if (/connected_at|schema cache|date\/time field value/i.test(msg)) {
-      const up2 = await supabaseServer.from("spotify_accounts").upsert({
-        user_id: user.id,
-        spotify_user_id: spotifyUserId,
+    const jwt = getBearer();
+    if (!jwt) return NextResponse.json({ error: "Missing bearer" }, { status: 401 });
+
+    const supa = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      {
+        auth: { persistSession: false, autoRefreshToken: false },
+        global: { headers: { Authorization: `Bearer ${jwt}` } },
+      }
+    );
+
+    const { data: u, error: uErr } = await supa.auth.getUser();
+    if (uErr || !u?.user) return NextResponse.json({ error: uErr?.message || "No user" }, { status: 401 });
+    const uid = u.user.id;
+
+    const scopes = toScopeArray(scopeStr);
+    const expiresAt = new Date(Date.now() + Math.max(0, expIn - 60) * 1000);
+
+    // Store account (RLS: own row)
+    const { error: upErr } = await supa
+      .from("spotify_accounts")
+      .upsert({
+        user_id: uid,
         access_token: access,
         refresh_token: refresh,
-        scope: scopeRaw,
-        expires_at
-      });
-      if (up2.error) {
-        return NextResponse.json({ error: up2.error.message || "attach failed (retry)" }, { status: 400 });
-      }
-    } else {
-      return NextResponse.json({ error: msg }, { status: 400 });
+        token_type: "Bearer",
+        scope: scopes,
+        expires_at: expiresAt,
+        connected_at: new Date(),
+        spotify_user_id: spUser || null,
+      }, { onConflict: "user_id" });
+
+    if (upErr) {
+      return NextResponse.json({ error: upErr.message, where: "spotify_accounts.upsert" }, { status: 400 });
     }
-  }
 
-  // Update profile flags (TRY array first, then FALLBACK to text only; never fail the whole attach)
-  const scopesArr = parseScopes(scopeRaw);
-
-  const p1 = await supabaseServer.from("profiles")
-    .update({
-      spotify_connected: true,
-      spotify_user_id: spotifyUserId,
-      spotify_scopes: scopesArr,          // text[]
-      spotify_scope_str: scopeRaw || null,
-      spotify_last_sync_at: new Date().toISOString()
-    })
-    .eq("id", user.id);
-
-  if (p1.error) {
-    const msg = p1.error.message || "";
-    // If array write fails for any reason, fall back to text-only write
-    const p2 = await supabaseServer.from("profiles")
-      .update({
+    // Mark profile as connected (RLS: own row)
+    const { error: profErr } = await supa
+      .from("profiles")
+      .upsert({
+        id: uid,
         spotify_connected: true,
-        spotify_user_id: spotifyUserId,
-        spotify_scope_str: scopeRaw || null,
-        spotify_last_sync_at: new Date().toISOString()
-      })
-      .eq("id", user.id);
+        spotify_user_id: spUser || null,
+        spotify_scopes: scopes,
+        spotify_last_sync_at: null,
+      }, { onConflict: "id" });
 
-    if (p2.error) {
-      return NextResponse.json({ error: p2.error.message || `profile update failed: ${msg}` }, { status: 400 });
+    if (profErr) {
+      return NextResponse.json({ error: profErr.message, where: "profiles.upsert" }, { status: 400 });
     }
+
+    // Clear temp cookies
+    ["sp_access_token_tmp","sp_refresh_token_tmp","sp_expires_in_tmp","sp_scope_tmp","sp_user_tmp"]
+      .forEach((n) => c.set(n, "", { path: "/", httpOnly: true, sameSite: "lax", maxAge: 0 }));
+
+    return NextResponse.json({ ok: true, spotify_user_id: spUser || null, scopes });
+  } catch (e: any) {
+    return NextResponse.json({ error: e?.message || String(e) }, { status: 500 });
   }
-
-  // Clear raw cookies after persisting
-  c.delete("sp_raw_access");
-  c.delete("sp_raw_refresh");
-
-  return NextResponse.json({ ok: true });
 }

@@ -1,94 +1,177 @@
-// /app/api/spotify/my/sync/route.ts
+// app/api/spotify/my/sync/route.ts
 import { NextResponse } from "next/server";
-import { requireUserFromRequest } from "@/lib/auth";
-import { fetchRecentlyPlayed, getAccountForUser, refreshToken, upsertAccount } from "@/lib/spotify";
-import { supabaseService } from "@/lib/supabaseServer";
+import { headers } from "next/headers";
+import { createClient } from "@supabase/supabase-js";
+import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
-/** Normalize the Spotify item -> row payloads */
-function normalize(items: any[]) {
-  return items.map((it) => {
-    const t = it.track;
-    const artists = Array.isArray(t?.artists) ? t.artists.map((a: any) => a.name).join(", ") : null;
-    const image = t?.album?.images?.[0]?.url || null;
-    return {
-      track_id: t?.id,
-      track_name: t?.name || null,
-      artist_name: artists,
-      album_name: t?.album?.name || null,
-      album_image_url: image,
-      played_at: new Date(it.played_at).toISOString(),
-      isrc: t?.external_ids?.isrc || null,
-      preview_url: t?.preview_url || null,
-    };
-  }).filter((r) => !!r.track_id && !!r.played_at);
+function getBearer() {
+  const h = headers();
+  const a = h.get("authorization") || h.get("Authorization") || "";
+  const m = a.match(/^Bearer\s+(.+)$/i);
+  return m ? m[1] : null;
 }
 
 export async function POST(req: Request) {
-  const { user } = await requireUserFromRequest(req);
-  const url = new URL(req.url);
-  const full = url.searchParams.has("full");
+  try {
+    const url = new URL(req.url);
+    const full = url.searchParams.get("full") === "1";
 
-  const admin = supabaseService();
-  let acct = await getAccountForUser(user.id);
-  if (!acct) return NextResponse.json({ ok: true, items_received: 0, imported: 0, note: "No account" });
+    // 1) Identify the user with a user-scoped client
+    const bearer = getBearer();
+    if (!bearer) return NextResponse.json({ error: "Missing bearer" }, { status: 401 });
 
-  // Refresh if expired
-  if (!acct.expires_at || new Date(acct.expires_at).getTime() <= Date.now() + 30_000) {
-    const rt = acct.refresh_token;
-    if (rt) {
-      const freshed = await refreshToken(rt);
-      const expires_at = new Date(Date.now() + (freshed.expires_in - 60) * 1000).toISOString();
-      await upsertAccount(user.id, {
-        access_token: freshed.access_token,
-        refresh_token: freshed.refresh_token || rt,
-        scope: freshed.scope || acct.scope,
-        expires_at,
-      });
-      acct = await getAccountForUser(user.id);
+    const userClient = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      { global: { headers: { Authorization: `Bearer ${bearer}` } }, auth: { persistSession: false } }
+    );
+    const { data: u, error: uErr } = await userClient.auth.getUser();
+    if (uErr || !u?.user) return NextResponse.json({ error: uErr?.message || "No user" }, { status: 401 });
+    const userId = u.user.id;
+
+    // 2) Read tokens with ADMIN client (bypass RLS)
+    const { data: acct, error: acctErr } = await supabaseAdmin
+      .from("spotify_accounts")
+      .select("access_token, refresh_token, expires_at")
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    if (acctErr || !acct) {
+      return NextResponse.json({ error: acctErr?.message || "No Spotify account" }, { status: 400 });
     }
-  }
 
-  // Fetch plays
-  const after = full ? undefined : acct.cursor_after_ms || undefined;
-  const json = await fetchRecentlyPlayed(acct.access_token, after);
-  const rows = normalize(json.items);
+    let accessToken = acct.access_token as string;
+    const refreshToken = acct.refresh_token as string;
+    const exp = acct.expires_at ? new Date(acct.expires_at).getTime() : 0;
 
-  // Upsert tracks, then listens
-  let imported = 0;
-  if (rows.length) {
-    const tracks = rows.map((r) => ({
-      id: r.track_id,
-      name: r.track_name || "Unknown",
-      artist_name: r.artist_name,
-      album_name: r.album_name,
-      image_url: r.album_image_url,
-      isrc: r.isrc,
-      preview_url: r.preview_url,
-      updated_at: new Date().toISOString(),
-    }));
+    // 3) Refresh if expiring
+    if (!accessToken || exp - Date.now() < 60_000) {
+      const base = process.env.APP_BASE_URL || "http://127.0.0.1:3000";
+      const redirect = process.env.SPOTIFY_REDIRECT_URI || `${base}/api/spotify/callback`;
 
-    await admin.from("spotify_tracks").upsert(tracks);
+      const resp = await fetch("https://accounts.spotify.com/api/token", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          Authorization:
+            "Basic " +
+            Buffer.from(
+              `${process.env.SPOTIFY_CLIENT_ID}:${process.env.SPOTIFY_CLIENT_SECRET}`
+            ).toString("base64"),
+        },
+        body: new URLSearchParams({
+          grant_type: "refresh_token",
+          refresh_token: refreshToken,
+          redirect_uri: redirect,
+        }),
+      });
 
-    const listens = rows.map((r) => ({
-      user_id: user.id,
-      track_id: r.track_id,
-      played_at: r.played_at,
-    }));
+      if (!resp.ok) {
+        const text = await resp.text();
+        return NextResponse.json({ error: "Refresh failed", text }, { status: 400 });
+      }
+      const t = await resp.json();
+      accessToken = t.access_token;
+      const newExp = new Date(Date.now() + Math.max(0, (t.expires_in ?? 3600) - 60) * 1000);
 
-    const { error } = await admin
+      await supabaseAdmin
+        .from("spotify_accounts")
+        .update({
+          access_token: accessToken,
+          refresh_token: t.refresh_token ?? refreshToken,
+          expires_at: newExp.toISOString(),
+        })
+        .eq("user_id", userId);
+    }
+
+    // 4) Windowing
+    let afterParam = "";
+    if (!full) {
+      const { data: last } = await supabaseAdmin
+        .from("spotify_listens")
+        .select("played_at")
+        .eq("user_id", userId)
+        .order("played_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (last?.played_at) afterParam = `&after=${new Date(last.played_at).getTime() + 1}`;
+    }
+
+    // 5) Fetch recently played
+    const apiUrl = `https://api.spotify.com/v1/me/player/recently-played?limit=50${afterParam}`;
+    const spRes = await fetch(apiUrl, { headers: { Authorization: `Bearer ${accessToken}` } });
+    if (!spRes.ok) {
+      const text = await spRes.text();
+      return NextResponse.json({ error: "Spotify API error", status: spRes.status, text }, { status: 400 });
+    }
+    const payload = await spRes.json();
+    const items = Array.isArray(payload.items) ? payload.items : [];
+    if (!items.length) return NextResponse.json({ ok: true, items_received: 0, imported: 0 });
+
+    type TrackRow = {
+      id: string;
+      name: string | null;
+      artist_name: string | null;
+      album_image_url: string | null;
+      preview_url: string | null;
+    };
+
+    // 6) Build rows
+    const trackMap = new Map<string, TrackRow>();
+    const listenMap = new Map<string, { user_id: string; track_id: string; played_at: string }>();
+
+    for (const it of items) {
+      const tr = it?.track;
+      if (!tr?.id) continue;
+
+      // Track row (dedupe by id)
+      if (!trackMap.has(tr.id)) {
+        const artistName = Array.isArray(tr.artists)
+          ? tr.artists.map((a: any) => a?.name).filter(Boolean).join(", ")
+          : null;
+        const img = tr.album?.images?.[0]?.url || null;
+
+        trackMap.set(tr.id, {
+          id: tr.id,
+          name: tr.name ?? null,
+          artist_name: artistName,
+          album_image_url: img,
+          preview_url: tr.preview_url ?? null,
+        });
+      }
+
+      // Listen row (dedupe by composite key)
+      const playedAtIso = it.played_at ? new Date(it.played_at).toISOString() : null;
+      if (playedAtIso) {
+        const key = `${userId}:${tr.id}:${playedAtIso}`;
+        if (!listenMap.has(key)) {
+          listenMap.set(key, { user_id: userId, track_id: tr.id, played_at: playedAtIso });
+        }
+      }
+    }
+
+    const tracks = Array.from(trackMap.values());
+    const listens = Array.from(listenMap.values());
+
+    // 7) Write with ADMIN client (bypass RLS) — unique rows only
+    const { error: trErr } = await supabaseAdmin
+      .from("spotify_tracks")
+      .upsert(tracks, { onConflict: "id" }); // safe because we deduped
+    if (trErr) return NextResponse.json({ error: trErr.message, where: "tracks.upsert" }, { status: 400 });
+
+    const { error: lsErr } = await supabaseAdmin
       .from("spotify_listens")
-      .upsert(listens, { onConflict: "user_id,track_id,played_at", ignoreDuplicates: true });
-    if (error && !String(error.message).includes("duplicate key")) throw error;
+      .upsert(listens, { onConflict: "user_id,track_id,played_at" });
+    if (lsErr) return NextResponse.json({ error: lsErr.message, where: "listens.upsert" }, { status: 400 });
 
-    imported = rows.length;
-    const newest = Math.max(...rows.map((r) => new Date(r.played_at).getTime()));
-    await upsertAccount(user.id, { cursor_after_ms: newest + 1 });
+    return NextResponse.json({
+      ok: true,
+      apiUrl,
+      items_received: items.length,
+      imported: listens.length,
+    });
+  } catch (e: any) {
+    return NextResponse.json({ error: e?.message || String(e) }, { status: 500 });
   }
-
-  return NextResponse.json({
-    ok: true,
-    items_received: rows.length,
-    imported,
-    used_after: !!after,
-  });
 }

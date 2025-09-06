@@ -703,7 +703,12 @@ export default function ProfilePage() {
               <div className="flex gap-2 flex-wrap">
                 {!p.spotify_connected ? (
                   <>
-                    <a href="/api/spotify/start" className="px-3 py-2 border rounded">Connect Spotify</a>
+                    <button
+  className="px-3 py-2 border rounded"
+  onClick={() => { window.location.href = "/api/spotify/start"; }}
+>
+  Connect Spotify
+</button>
                     <button className="px-3 py-2 border rounded" onClick={finalizeSpotify} disabled={busy}>
                       Finalize connection
                     </button>
