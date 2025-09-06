@@ -20,7 +20,8 @@ export function middleware(req: NextRequest) {
       path.startsWith("/static/") ||
       /\.(?:css|js|map|png|jpg|jpeg|gif|svg|webp|ico|txt|mp4|woff2?)$/i.test(path);
 
-    if (!isAsset && url.hostname === "localhost") {
+    const host = req.headers.get("host")?.split(":")[0];
+    if (!isAsset && host === "localhost") {
       url.hostname = "127.0.0.1";
       return NextResponse.redirect(url, 307);
     }
