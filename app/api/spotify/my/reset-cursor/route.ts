@@ -5,6 +5,6 @@ import { upsertAccount } from "@/lib/spotify";
 
 export async function POST(req: Request) {
   const user = await requireUserFromRequest(req);
-  await upsertAccount(user.id, { cursor_after_ms: null });
+  await upsertAccount(user.id, { last_after_cursor_ms: null });
   return NextResponse.json({ ok: true });
 }

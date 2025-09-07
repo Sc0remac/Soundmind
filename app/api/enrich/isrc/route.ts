@@ -1,6 +1,6 @@
 // app/api/enrich/isrc/route.ts
 import { NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/supabaseAdmin";
+import { supabaseAdmin, usingServiceRole } from "@/lib/supabaseAdmin";
 import { requireUserFromRequest } from "@/lib/auth";
 
 const SPOTIFY_CLIENT_ID = process.env.SPOTIFY_CLIENT_ID!;
@@ -82,6 +82,13 @@ async function fetchTracksBatch(token: string, ids: string[]) {
 
 export async function POST(req: Request) {
   try {
+    if (!usingServiceRole) {
+      return NextResponse.json(
+        { ok: false, error: "Missing service role" },
+        { status: 500 }
+      );
+    }
+
     // 1) Ensure user
     const user = await requireUserFromRequest(req);
     const userId = user.id;
@@ -143,15 +150,16 @@ export async function POST(req: Request) {
       }
       looked += slice.length;
 
-      const trackRows: any[] = [];
-      const artistRows: { id: string; name: string }[] = [];
+      const trackMap = new Map<string, any>();
+      const artistMap = new Map<string, { id: string; name: string }>();
+      const linkSet = new Set<string>();
       const linkRows: { track_id: string; artist_id: string }[] = [];
 
       for (const t of j.tracks || []) {
         const albumImg = t.album?.images?.[0]?.url || null;
         const albumName = t.album?.name || null;
 
-        trackRows.push({
+        trackMap.set(t.id, {
           id: t.id,
           name: t.name || "(unknown)", // NEVER null; protects NOT NULL constraint
           album_name: albumName,
@@ -168,11 +176,20 @@ export async function POST(req: Request) {
         if (Array.isArray(t.artists)) {
           for (const a of t.artists) {
             if (!a?.id) continue;
-            artistRows.push({ id: a.id, name: a.name ?? "" });
-            linkRows.push({ track_id: t.id, artist_id: a.id });
+            if (!artistMap.has(a.id)) {
+              artistMap.set(a.id, { id: a.id, name: a.name ?? "" });
+            }
+            const key = `${t.id}:${a.id}`;
+            if (!linkSet.has(key)) {
+              linkSet.add(key);
+              linkRows.push({ track_id: t.id, artist_id: a.id });
+            }
           }
         }
       }
+
+      const trackRows = Array.from(trackMap.values());
+      const artistRows = Array.from(artistMap.values());
 
       if (trackRows.length) {
         const { error: uErr, count } = await supabaseAdmin
