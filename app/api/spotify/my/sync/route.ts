@@ -117,9 +117,15 @@ export async function POST(req: Request) {
       preview_url: string | null;
     };
 
+    type ArtistRow = { id: string; name: string };
+    type TrackArtistRow = { track_id: string; artist_id: string };
+
     // 6) Build rows
     const trackMap = new Map<string, TrackRow>();
     const listenMap = new Map<string, { user_id: string; track_id: string; played_at: string }>();
+    const artistMap = new Map<string, ArtistRow>();
+    const trackArtistSet = new Set<string>();
+    const trackArtistRows: TrackArtistRow[] = [];
 
     for (const it of items) {
       const tr = it?.track;
@@ -141,6 +147,21 @@ export async function POST(req: Request) {
         });
       }
 
+      // Artist + link rows
+      if (Array.isArray(tr.artists)) {
+        for (const a of tr.artists) {
+          if (!a?.id) continue;
+          if (!artistMap.has(a.id)) {
+            artistMap.set(a.id, { id: a.id, name: a.name ?? "" });
+          }
+          const key = `${tr.id}:${a.id}`;
+          if (!trackArtistSet.has(key)) {
+            trackArtistSet.add(key);
+            trackArtistRows.push({ track_id: tr.id, artist_id: a.id });
+          }
+        }
+      }
+
       // Listen row (dedupe by composite key)
       const playedAtIso = it.played_at ? new Date(it.played_at).toISOString() : null;
       if (playedAtIso) {
@@ -153,12 +174,24 @@ export async function POST(req: Request) {
 
     const tracks = Array.from(trackMap.values());
     const listens = Array.from(listenMap.values());
+    const artists = Array.from(artistMap.values());
+    const trackArtists = trackArtistRows;
 
     // 7) Write with ADMIN client (bypass RLS) — unique rows only
     const { error: trErr } = await supabaseAdmin
       .from("spotify_tracks")
       .upsert(tracks, { onConflict: "id" }); // safe because we deduped
     if (trErr) return NextResponse.json({ error: trErr.message, where: "tracks.upsert" }, { status: 400 });
+
+    const { error: arErr } = await supabaseAdmin
+      .from("spotify_artists")
+      .upsert(artists, { onConflict: "id" });
+    if (arErr) return NextResponse.json({ error: arErr.message, where: "artists.upsert" }, { status: 400 });
+
+    const { error: taErr } = await supabaseAdmin
+      .from("spotify_track_artists")
+      .upsert(trackArtists, { onConflict: "track_id,artist_id" });
+    if (taErr) return NextResponse.json({ error: taErr.message, where: "track_artists.upsert" }, { status: 400 });
 
     const { error: lsErr } = await supabaseAdmin
       .from("spotify_listens")

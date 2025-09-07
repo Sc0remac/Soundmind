@@ -1,5 +1,5 @@
 // /lib/spotify.ts
-import { supabaseService } from "./supabaseServer";
+import { supabaseService } from "./supabaseAdmin";
 
 const SPOTIFY_ID = process.env.SPOTIFY_CLIENT_ID!;
 const SPOTIFY_SECRET = process.env.SPOTIFY_CLIENT_SECRET!;

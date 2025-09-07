@@ -23,12 +23,12 @@ export async function POST() {
     return NextResponse.json({ error: "Missing service role" }, { status: 500 });
   }
 
-  // Pick tracks that have an ISRC but no tempo or gain yet
+  // Pick tracks that have an ISRC but no tempo/bpm or gain yet
   const { data: rows, error } = await supabaseAdmin
     .from("spotify_tracks")
-    .select("id,isrc,tempo,gain,deezer_track_id")
+    .select("id,isrc,tempo,bpm,gain,deezer_track_id")
     .not("isrc", "is", null)
-    .or("tempo.is.null,gain.is.null,deezer_track_id.is.null")
+    .or("tempo.is.null,bpm.is.null,gain.is.null,deezer_track_id.is.null")
     .limit(200);
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
@@ -44,6 +44,7 @@ export async function POST() {
         id: r.id,
         deezer_track_id: d.id?.toString() ?? r.deezer_track_id,
         tempo: typeof d.bpm === "number" ? d.bpm : r.tempo,
+        bpm: typeof d.bpm === "number" ? d.bpm : r.bpm,
         gain: typeof d.gain === "number" ? d.gain : r.gain,
         last_enriched_at: new Date().toISOString(),
         meta_provider: { ...(r.meta_provider || {}), deezer: true },

@@ -1,13 +1,22 @@
 // lib/supabaseAdmin.ts
 import { createClient } from "@supabase/supabase-js";
 
-if (!process.env.NEXT_PUBLIC_SUPABASE_URL) throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL");
-if (!process.env.SUPABASE_SERVICE_ROLE_KEY) throw new Error("Missing SUPABASE_SERVICE_ROLE_KEY");
+const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-export const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY,
-  {
-    auth: { persistSession: false, autoRefreshToken: false },
+// Expose whether the service role key is configured so API routes can bail early
+export const usingServiceRole = !!(url && serviceKey);
+
+// Lazily create a Supabase client that uses the service role key.  This should
+// only be used in server-side code as it has full access to the database.
+export function supabaseService() {
+  if (!usingServiceRole) {
+    throw new Error("SUPABASE_SERVICE_ROLE_KEY is not set");
   }
-);
+  return createClient(url!, serviceKey!, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+}
+
+// Convenience singleton for callers that just need a client instance.
+export const supabaseAdmin = usingServiceRole ? supabaseService() : (null as any);

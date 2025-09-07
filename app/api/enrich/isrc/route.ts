@@ -81,9 +81,8 @@ async function fetchTracksBatch(token: string, ids: string[]) {
 export async function POST(req: Request) {
   try {
     // 1) Ensure user
-    const auth = await requireUserFromRequest(req);
-    if (!auth.ok) return NextResponse.json({ error: auth.message }, { status: auth.status });
-    const userId = auth.userId;
+    const user = await requireUserFromRequest(req);
+    const userId = user.id;
 
     // 2) Find recent track IDs (we’ll enrich these)
     const { data: listens, error: lErr } = await supabaseAdmin
