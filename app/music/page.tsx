@@ -15,6 +15,8 @@ type Row = {
   energy: number | null;
   valence: number | null;
   genre: string | null;
+  genre_primary: string | null;
+  genre_tags: string[] | null;
 };
 
 export default function MusicPage() {
@@ -39,12 +41,16 @@ export default function MusicPage() {
   const filtered = useMemo(() => {
     if (!q) return rows;
     const qq = q.toLowerCase();
-    return rows.filter(
-      (r) =>
+    return rows.filter((r) => {
+      const tags = (r.genre_tags || []).join(",").toLowerCase();
+      return (
         r.track_name.toLowerCase().includes(qq) ||
         (r.artist_name || "").toLowerCase().includes(qq) ||
-        (r.genre || "").toLowerCase().includes(qq)
-    );
+        (r.genre || "").toLowerCase().includes(qq) ||
+        (r.genre_primary || "").toLowerCase().includes(qq) ||
+        tags.includes(qq)
+      );
+    });
   }, [rows, q]);
 
   return (
@@ -87,7 +93,12 @@ export default function MusicPage() {
                 </div>
               </div>
               <div className="text-xs text-gray-600 text-right">
-                {r.genre ? <div>Genre: {r.genre}</div> : null}
+                {r.genre_primary ? <div>Genre: {r.genre_primary}</div> : null}
+                {r.genre_tags && r.genre_tags.filter((g) => g !== r.genre_primary).length ? (
+                  <div>
+                    Sub-genre: {r.genre_tags.filter((g) => g !== r.genre_primary).join(", ")}
+                  </div>
+                ) : null}
                 {r.bpm ? <div>BPM: {Math.round(r.bpm)}</div> : null}
                 {r.energy != null ? <div>Energy: {r.energy.toFixed(2)}</div> : null}
                 {r.valence != null ? <div>Valence: {r.valence.toFixed(2)}</div> : null}
