@@ -6,7 +6,8 @@
     "dev": "next dev -H 127.0.0.1 -p 3000",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "seed:dummy": "ts-node scripts/seedDummyData.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.41.3",
@@ -29,6 +30,7 @@
     "@types/react-dom": "^18.2.11",
     "eslint": "^8.49.0",
     "eslint-config-next": "^14.0.2",
+    "ts-node": "^10.9.2",
     "typescript": "^5.3.2"
   }
 }
