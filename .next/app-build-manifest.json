@@ -1,9 +1,9 @@
 {
   "pages": {
-    "/log-mood/page": [
+    "/timeline/page": [
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
-      "static/chunks/app/log-mood/page.js"
+      "static/chunks/app/timeline/page.js"
     ],
     "/layout": [
       "static/chunks/webpack.js",
@@ -16,10 +16,10 @@
       "static/chunks/main-app.js",
       "static/chunks/app/page.js"
     ],
-    "/profile/page": [
+    "/insights/page": [
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
-      "static/chunks/app/profile/page.js"
+      "static/chunks/app/insights/page.js"
     ],
     "/music/page": [
       "static/chunks/webpack.js",
