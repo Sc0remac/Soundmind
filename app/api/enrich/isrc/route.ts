@@ -28,7 +28,7 @@ async function refreshAccessToken(refresh_token: string) {
   return r.json() as Promise<{ access_token: string; expires_in: number }>;
 }
 
-async function getUserAccessToken(userId: string) {
+async function getUserAccessToken(userId: string, forceRefresh = false) {
   const { data, error } = await supabaseAdmin
     .from("spotify_accounts")
     .select("access_token, refresh_token, expires_at")
@@ -38,7 +38,8 @@ async function getUserAccessToken(userId: string) {
   if (error || !data) throw new Error("Spotify not connected");
 
   let { access_token, refresh_token, expires_at } = data;
-  const willExpire = typeof expires_at === "number" ? Date.now() / 1000 > expires_at - 60 : false;
+  const willExpire =
+    forceRefresh || (typeof expires_at === "number" ? Date.now() / 1000 > expires_at - 60 : true);
 
   if (!access_token || willExpire) {
     if (!refresh_token) throw new Error("Missing Spotify refresh token");
@@ -121,7 +122,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: true, looked_up: 0, updated: 0, note: "All recent tracks already have ISRC" });
     }
 
-    const token = await getUserAccessToken(userId);
+    let token = await getUserAccessToken(userId);
 
     // 4) Fetch in chunks of 50 and upsert full rows
     let looked = 0;
@@ -129,7 +130,17 @@ export async function POST(req: Request) {
 
     for (let i = 0; i < needLookup.length; i += 50) {
       const slice = needLookup.slice(i, i + 50);
-      const j = await fetchTracksBatch(token, slice);
+      let j;
+      try {
+        j = await fetchTracksBatch(token, slice);
+      } catch (e: any) {
+        if (String(e).includes("401")) {
+          token = await getUserAccessToken(userId, true);
+          j = await fetchTracksBatch(token, slice);
+        } else {
+          throw e;
+        }
+      }
       looked += slice.length;
 
       const trackRows: any[] = [];
