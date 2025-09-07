@@ -2,6 +2,7 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { requireUserFromRequest } from "@/lib/auth";
+import { bpmBand } from "@/lib/stats";
 // bpm bands no longer needed
 
 export async function GET(req: Request) {
@@ -18,6 +19,7 @@ export async function GET(req: Request) {
     const { data, error } = await supabaseAdmin
       .from("v_correlations_ready")
       .select(
+        "workout_id, started_at, split_name, tonnage, sets_count, tonnage_z, pre_bpm, pre_energy, pre_valence, pre_top_genre, mood_delta"
         "workout_id, started_at, split_name, tonnage, sets_count, tonnage_z, pre_energy, pre_valence, pre_top_genre, pre_top_artist, mood_delta"
       )
       .eq("user_id", userId)
@@ -41,6 +43,8 @@ export async function GET(req: Request) {
         sets: r.sets_count,
         z: r.tonnage_z,
         pre: {
+          bpm: r.pre_bpm,
+          band: bpmBand(r.pre_bpm),
           energy: r.pre_energy,
           valence: r.pre_valence,
           genre: r.pre_top_genre,
@@ -60,4 +64,4 @@ export async function GET(req: Request) {
   } catch (e: any) {
     return NextResponse.json({ error: e?.message || String(e) }, { status: 401 });
   }
-}
+} 

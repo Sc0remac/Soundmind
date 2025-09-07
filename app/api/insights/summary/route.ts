@@ -2,6 +2,7 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { requireUserFromRequest } from "@/lib/auth";
+import { diffInMeans, mean, confidence, bpmBand, bucketHour } from "@/lib/stats";
 import { diffInMeans, mean, confidence, bucketHour } from "@/lib/stats";
 
 type Row = {
@@ -9,8 +10,10 @@ type Row = {
   started_at: string;
   split_name: string | null;
   tonnage_z: number | null;
+  pre_bpm: number | null;
   pre_energy: number | null;
   pre_valence: number | null;
+  pre_bpm_band: string | null;
   pre_top_genre: string | null;
   pre_top_artist: string | null;
   mood_delta: number | null;
@@ -32,6 +35,7 @@ export async function GET(req: Request) {
     const { data, error } = await supabaseAdmin
       .from("v_correlations_ready")
       .select(
+        "workout_id, started_at, split_name, tonnage_z, pre_bpm, pre_energy, pre_valence, pre_bpm_band, pre_top_genre, mood_delta"
         "workout_id, started_at, split_name, tonnage_z, pre_energy, pre_valence, pre_top_genre, pre_top_artist, mood_delta"
       )
       .eq("user_id", userId)
@@ -57,6 +61,23 @@ export async function GET(req: Request) {
   const effectMood = diffInMeans(vhi, vlo);
   const moodN = vhi.filter(Number.isFinite).length + vlo.filter(Number.isFinite).length;
 
+  // --- BPM band ranking
+  const byBand = new Map<string, number[]>();
+  for (const r of rows) {
+    const b = r.pre_bpm != null ? bpmBand(r.pre_bpm) : r.pre_bpm_band;
+    if (!b) continue;
+    const arr = byBand.get(b) || [];
+    if (Number.isFinite(r.tonnage_z)) arr.push(r.tonnage_z as number);
+    byBand.set(b, arr);
+  }
+  const bandStats = [...byBand.entries()].map(([band, zs]) => ({
+    band,
+    uplift: mean(zs),
+    n: zs.length,
+  }));
+  bandStats.sort((a, b) => (b.uplift || -9) - (a.uplift || -9));
+  const bestBand = bandStats[0] || null;
+
   // --- Time of day
   const byHour = new Map<string, number[]>();
   for (const r of rows) {
@@ -79,6 +100,7 @@ export async function GET(req: Request) {
     if (Number.isFinite(r.mood_delta)) entry.mood.push(r.mood_delta as number);
     byGenre.set(g, entry);
   }
+  const genreCards = [...byGenre.entries()]
   const genreStats = [...byGenre.entries()]
     .map(([g, v]) => ({
       genre: g,
@@ -86,6 +108,7 @@ export async function GET(req: Request) {
       mood: mean(v.mood),
       n: Math.max(v.perf.length, v.mood.length),
     }))
+    .filter((g) => g.n >= 5)
     .filter((g) => g.n >= 5);
 
   const genreCards = [...genreStats]
@@ -120,6 +143,7 @@ export async function GET(req: Request) {
     .sort((a, b) => (b.perf || -9) - (a.perf || -9))[0] || null;
 
   const res = {
+    filters: { days, split: split || null, sample: rows.length },
     filters: { days, split: split || null, genre: genre || null, artist: artist || null, sample: rows.length },
     cards: {
       music_to_performance: {
@@ -134,6 +158,7 @@ export async function GET(req: Request) {
         n: moodN,
         confidence: confidence(moodN, Math.abs(effectMood || 0)),
       },
+      best_bpm_band: bestBand,
       top_artist_performance: artistPerfTop
         ? { artist: artistPerfTop.artist, uplift: artistPerfTop.perf, n: artistPerfTop.n }
         : null,
@@ -150,4 +175,4 @@ export async function GET(req: Request) {
   } catch (e: any) {
     return NextResponse.json({ error: e?.message || String(e) }, { status: 401 });
   }
-}
+} 
