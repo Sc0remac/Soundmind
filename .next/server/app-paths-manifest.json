@@ -3,6 +3,6 @@
   "/page": "app/page.js",
   "/profile/page": "app/profile/page.js",
   "/music/page": "app/music/page.js",
-  "/insights/page": "app/insights/page.js",
-  "/timeline/page": "app/timeline/page.js"
+  "/api/music/list/route": "app/api/music/list/route.js",
+  "/insights/page": "app/insights/page.js"
 }

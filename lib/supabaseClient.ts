@@ -1,17 +1,11 @@
 import { createClient } from '@supabase/supabase-js';
 
-// Create a browser client. This can be used in client components.
-// The environment variables NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY
-// must be defined in your `.env.local` file. They are safe to expose because
-// Supabase uses row-level security to restrict access by user.
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL as string;
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY as string;
+// Browser client: only initialize if env vars are present. During build or tests
+// where env may be missing, this will be `null` to avoid throw.
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
-
-// Create a server-side client. This uses the service role key which should never
-// be exposed to the browser. It is only used in server actions or API routes.
-export function getServiceSupabase() {
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY as string;
-  return createClient(supabaseUrl, serviceRoleKey);
-}
+export const supabase =
+  supabaseUrl && supabaseAnonKey
+    ? createClient(supabaseUrl, supabaseAnonKey)
+    : (null as any);

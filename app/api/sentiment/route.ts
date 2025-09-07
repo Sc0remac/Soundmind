@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import OpenAI from 'openai';
-import { getServiceSupabase } from '@/lib/supabaseClient';
+import { supabaseAdmin } from '@/lib/supabaseAdmin';
 
 /**
  * This API route handles asynchronous sentiment analysis for mood journal entries.
@@ -45,9 +45,8 @@ export async function POST(req: NextRequest) {
       }
     }
     // update mood record
-    const supabase = getServiceSupabase();
     if (sentiment) {
-      await supabase
+      await supabaseAdmin
         .from('moods')
         .update({ sentiment })
         .eq('id', moodId);

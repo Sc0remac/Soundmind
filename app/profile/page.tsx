@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
 /* =========================
@@ -85,7 +84,6 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
    ========================= */
 
 export default function ProfilePage() {
-  const search = useSearchParams();
 
   const [email, setEmail] = useState<string | null>(null);
   const [p, setP] = useState<Profile | null>(null);
@@ -350,15 +348,17 @@ export default function ProfilePage() {
 
   /* -------- Auto-finalize once after redirect -------- */
   useEffect(() => {
-    const flag = search.get("spotify");
-    const origin = typeof window !== "undefined" ? window.location.origin : "(ssr)";
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const flag = params.get("spotify");
+    const origin = window.location.origin;
     if (flag) log(`Arrived on ${origin} with ?spotify=${flag}`);
     if (flag === "connected" && p && !p.spotify_connected && !finalizedOnce) {
       setFinalizedOnce(true);
       finalizeSpotify();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search, p?.spotify_connected, finalizedOnce]);
+  }, [p?.spotify_connected, finalizedOnce]);
 
   if (!p) return <p className="text-sm text-gray-600">Loading profile…</p>;
 

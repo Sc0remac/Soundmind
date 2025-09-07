@@ -74,6 +74,7 @@ async function fetchTracksBatch(token: string, ids: string[]) {
       preview_url: string | null;
       external_ids?: { isrc?: string };
       album?: { name?: string; images?: Array<{ url: string }> };
+      artists?: Array<{ id: string; name: string }>;
     }>;
   }>;
 }
@@ -93,7 +94,9 @@ export async function POST(req: Request) {
       .limit(200);
 
     if (lErr) throw new Error(lErr.message);
-    const recentIds = Array.from(new Set((listens || []).map((r) => r.track_id)));
+    const recentIds = Array.from(
+      new Set((listens as { track_id: string }[] | null | undefined)?.map((r) => r.track_id) || [])
+    );
     if (recentIds.length === 0) {
       return NextResponse.json({ ok: true, looked_up: 0, updated: 0, note: "No recent listens" });
     }
@@ -104,7 +107,10 @@ export async function POST(req: Request) {
       .select("id, isrc, preview_url, name")
       .in("id", recentIds);
 
-    const existing = new Map(tracks?.map((t) => [t.id, t]) || []);
+    const existing = new Map(
+      (tracks as { id: string; isrc: string | null; preview_url: string | null; name: string | null }[] | null | undefined)
+        ?.map((t) => [t.id, t]) || []
+    );
     const needLookup = recentIds.filter((id) => {
       const row = existing.get(id);
       // fetch if missing ISRC OR preview_url OR (edge) no row at all
@@ -126,10 +132,15 @@ export async function POST(req: Request) {
       const j = await fetchTracksBatch(token, slice);
       looked += slice.length;
 
-      const upserts = (j.tracks || []).map((t) => {
+      const trackRows: any[] = [];
+      const artistRows: { id: string; name: string }[] = [];
+      const linkRows: { track_id: string; artist_id: string }[] = [];
+
+      for (const t of j.tracks || []) {
         const albumImg = t.album?.images?.[0]?.url || null;
         const albumName = t.album?.name || null;
-        return {
+
+        trackRows.push({
           id: t.id,
           name: t.name || "(unknown)", // NEVER null; protects NOT NULL constraint
           album_name: albumName,
@@ -141,15 +152,37 @@ export async function POST(req: Request) {
           meta_provider: {
             spotify_track: true,
           },
-        };
-      });
+        });
 
-      if (upserts.length) {
+        if (Array.isArray(t.artists)) {
+          for (const a of t.artists) {
+            if (!a?.id) continue;
+            artistRows.push({ id: a.id, name: a.name ?? "" });
+            linkRows.push({ track_id: t.id, artist_id: a.id });
+          }
+        }
+      }
+
+      if (trackRows.length) {
         const { error: uErr, count } = await supabaseAdmin
           .from("spotify_tracks")
-          .upsert(upserts, { onConflict: "id", ignoreDuplicates: false, count: "exact" });
+          .upsert(trackRows, { onConflict: "id", ignoreDuplicates: false, count: "exact" });
         if (uErr) throw new Error(uErr.message);
         updated += count || 0;
+      }
+
+      if (artistRows.length) {
+        const { error: arErr } = await supabaseAdmin
+          .from("spotify_artists")
+          .upsert(artistRows, { onConflict: "id" });
+        if (arErr) throw new Error(arErr.message);
+      }
+
+      if (linkRows.length) {
+        const { error: lnErr } = await supabaseAdmin
+          .from("spotify_track_artists")
+          .upsert(linkRows, { onConflict: "track_id,artist_id" });
+        if (lnErr) throw new Error(lnErr.message);
       }
 
       // small delay to be nice

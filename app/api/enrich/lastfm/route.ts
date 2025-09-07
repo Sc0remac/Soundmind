@@ -191,6 +191,9 @@ async function fetchTagsFor(artist: string, track: string): Promise<LastfmTag[]>
 type TrackRow = {
   id: string;
   name: string;
+  genre_primary?: string | null;
+  genre_tags?: string[] | null;
+  artist_name?: string | null;
 };
 
 type LinkRow = { track_id: string; artist_id: string };
@@ -212,12 +215,17 @@ export async function POST() {
     .limit(100);
   if (lErr) return NextResponse.json({ ok: false, error: lErr.message }, { status: 500 });
 
-  const ids = Array.from(new Set((listens || []).map((r) => r.track_id))).slice(0, 100);
+  const ids = Array.from(
+    new Set((listens as { track_id: string }[] | null | undefined)?.map((r) => r.track_id) || [])
+  ).slice(0, 100);
   if (ids.length === 0) return NextResponse.json({ ok: true, updated: 0, note: "No recent listens" });
 
   // 2) Fetch tracks + artists
   const [{ data: tracks, error: tErr }, { data: links }, { data: artists }] = await Promise.all([
-    supabaseAdmin.from("spotify_tracks").select("id,name,genre_primary,genre_tags").in("id", ids),
+    supabaseAdmin
+      .from("spotify_tracks")
+      .select("id,name,genre_primary,genre_tags,artist_name")
+      .in("id", ids),
     supabaseAdmin.from("spotify_track_artists").select("track_id,artist_id").in("track_id", ids),
     supabaseAdmin.from("spotify_artists").select("id,name"),
   ] as const);
@@ -225,10 +233,10 @@ export async function POST() {
   if (tErr) return NextResponse.json({ ok: false, error: tErr.message }, { status: 500 });
 
   const artistMap = new Map<string, string>();
-  (artists || []).forEach((a) => artistMap.set(a.id, a.name));
+  (artists as ArtistRow[] | null | undefined)?.forEach((a) => artistMap.set(a.id, a.name));
 
   const trackArtists = new Map<string, string[]>();
-  (links || []).forEach((lnk) => {
+  (links as LinkRow[] | null | undefined)?.forEach((lnk) => {
     const arr = trackArtists.get(lnk.track_id) || [];
     const nm = artistMap.get(lnk.artist_id);
     if (nm) arr.push(nm);
@@ -240,7 +248,13 @@ export async function POST() {
   const results: any[] = [];
 
   for (const tr of tracks as TrackRow[]) {
-    const artistsForTrack = trackArtists.get(tr.id) || [];
+    let artistsForTrack = trackArtists.get(tr.id) || [];
+    if ((!artistsForTrack || artistsForTrack.length === 0) && tr.artist_name) {
+      artistsForTrack = String(tr.artist_name)
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+    }
     const artist = artistsForTrack[0] || ""; // pick the first (primary) artist
     if (!artist || !tr.name) continue;
 
@@ -248,7 +262,7 @@ export async function POST() {
     const { ordered, top } = scoreTags(tags);
     const { energy, valence } = deriveEnergyValence(ordered);
 
-    const genre_primary = top || tr["genre_primary"] || null;
+    const genre_primary = top || tr.genre_primary || null;
     const genre_tags = ordered.slice(0, 8);
 
     const { error: uErr } = await supabaseAdmin

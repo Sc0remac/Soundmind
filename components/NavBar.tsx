@@ -38,7 +38,7 @@ export default function NavBar() {
       }
     }
     init();
-    const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => {
+    const { data: sub } = supabase.auth.onAuthStateChange((_e: any, s: any) => {
       const u = s?.user ?? null;
       setUser(u);
       if (u) {
@@ -47,7 +47,7 @@ export default function NavBar() {
           .select("is_admin")
           .eq("id", u.id)
           .maybeSingle()
-          .then(({ data }) => setIsAdmin(!!data?.is_admin));
+          .then(({ data }: { data: any }) => setIsAdmin(!!data?.is_admin));
       } else setIsAdmin(false);
     });
     return () => sub.subscription?.unsubscribe?.();

@@ -1,6 +1,6 @@
 // app/api/insights/summary/route.ts
 import { NextResponse } from "next/server";
-import { supabaseServer } from "@/lib/supabaseServer";
+import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { requireUserFromRequest } from "@/lib/auth";
 import { diffInMeans, mean, confidence, bpmBand, bucketHour } from "@/lib/stats";
 
@@ -18,29 +18,29 @@ type Row = {
 };
 
 export async function GET(req: Request) {
-  const auth = await requireUserFromRequest(req);
-  if ("error" in auth) return NextResponse.json({ error: auth.error }, { status: auth.status });
-  const userId = auth.user.id;
+  try {
+    const user = await requireUserFromRequest(req);
+    const userId = user.id;
 
-  const { searchParams } = new URL(req.url);
-  const days = Number(searchParams.get("days") || "30");
-  const split = searchParams.get("split"); // optional
+    const { searchParams } = new URL(req.url);
+    const days = Number(searchParams.get("days") || "30");
+    const split = searchParams.get("split"); // optional
 
-  const since = new Date(Date.now() - days * 86400_000).toISOString();
+    const since = new Date(Date.now() - days * 86400_000).toISOString();
 
-  const { data, error } = await supabaseServer
-    .from("v_correlations_ready")
-    .select(
-      "workout_id, started_at, split_name, tonnage_z, pre_bpm, pre_energy, pre_valence, pre_bpm_band, pre_top_genre, mood_delta"
-    )
-    .eq("user_id", userId)
-    .gte("started_at", since)
-    .order("started_at", { ascending: false });
+    const { data, error } = await supabaseAdmin
+      .from("v_correlations_ready")
+      .select(
+        "workout_id, started_at, split_name, tonnage_z, pre_bpm, pre_energy, pre_valence, pre_bpm_band, pre_top_genre, mood_delta"
+      )
+      .eq("user_id", userId)
+      .gte("started_at", since)
+      .order("started_at", { ascending: false });
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  let rows = (data || []) as Row[];
-  if (split) rows = rows.filter((r) => (r.split_name || "") === split);
+    let rows = (data || []) as Row[];
+    if (split) rows = rows.filter((r) => (r.split_name || "") === split);
 
   // --- Music→Performance (energy high vs baseline)
   const hi = rows.filter((r) => (r.pre_energy ?? 0) >= 0.7).map((r) => r.tonnage_z ?? NaN);
@@ -125,5 +125,8 @@ export async function GET(req: Request) {
     },
   };
 
-  return NextResponse.json(res);
+    return NextResponse.json(res);
+  } catch (e: any) {
+    return NextResponse.json({ error: e?.message || String(e) }, { status: 401 });
+  }
 }
