@@ -1,6 +1,8 @@
 {
-  "/timeline/page": "app/timeline/page.js",
+  "/_not-found/page": "app/_not-found/page.js",
+  "/page": "app/page.js",
+  "/profile/page": "app/profile/page.js",
+  "/music/page": "app/music/page.js",
   "/api/music/list/route": "app/api/music/list/route.js",
-  "/insights/page": "app/insights/page.js",
-  "/music/page": "app/music/page.js"
+  "/insights/page": "app/insights/page.js"
 }

@@ -2527,16 +2527,16 @@ CREATE MATERIALIZED VIEW public.mv_sessions_music_pre AS
  SELECT p.workout_id,
     p.user_id,
     p.started_at,
-    count(l.id) AS listens_count,
-    avg(t.bpm) AS avg_bpm,
-    avg(t.energy) AS avg_energy,
-    avg(t.valence) AS avg_valence,
-    public.most_common_text(array_remove(array_agg(t.genre_primary), NULL::text)) AS top_genre,
-    public.most_common_text(array_remove(array_agg(gt.tag), NULL::text)) AS top_tag
-   FROM (((public.mv_sessions_performance p
-     LEFT JOIN public.spotify_listens l ON (((l.user_id = p.user_id) AND (l.played_at >= (p.started_at - '01:00:00'::interval)) AND (l.played_at < p.started_at))))
-     LEFT JOIN public.spotify_tracks t ON ((t.id = l.track_id)))
-     LEFT JOIN LATERAL unnest(COALESCE(t.genre_tags, '{}'::text[])) gt(tag) ON (true))
+    count(v.id) AS listens_count,
+    avg(v.bpm) AS avg_bpm,
+    avg(v.energy) AS avg_energy,
+    avg(v.valence) AS avg_valence,
+    public.most_common_text(array_remove(array_agg(v.genre_primary), NULL::text)) AS top_genre,
+    public.most_common_text(array_remove(array_agg(gt.tag), NULL::text)) AS top_tag,
+    public.most_common_text(array_remove(array_agg(v.artist_name), NULL::text)) AS top_artist
+   FROM ((public.mv_sessions_performance p
+     LEFT JOIN public.v_spotify_listens_expanded v ON (((v.user_id = p.user_id) AND (v.played_at >= (p.started_at - '01:00:00'::interval)) AND (v.played_at < p.started_at))))
+     LEFT JOIN LATERAL unnest(COALESCE(v.genre_tags, '{}'::text[])) gt(tag) ON (true))
   GROUP BY p.workout_id, p.user_id, p.started_at
   WITH NO DATA;
 
@@ -2694,6 +2694,7 @@ CREATE VIEW public.v_correlations_ready AS
     pre.avg_valence AS pre_valence,
     public.bpm_band(pre.avg_bpm) AS pre_bpm_band,
     pre.top_genre AS pre_top_genre,
+    pre.top_artist AS pre_top_artist,
     post.avg_bpm AS post_bpm,
     post.avg_energy AS post_energy,
     post.avg_valence AS post_valence,

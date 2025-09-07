@@ -2,7 +2,7 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { requireUserFromRequest } from "@/lib/auth";
-import { bpmBand } from "@/lib/stats";
+// bpm bands no longer needed
 
 export async function GET(req: Request) {
   try {
@@ -11,12 +11,14 @@ export async function GET(req: Request) {
 
     const { searchParams } = new URL(req.url);
     const days = Number(searchParams.get("days") || "30");
+    const genre = searchParams.get("genre");
+    const artist = searchParams.get("artist");
     const since = new Date(Date.now() - days * 86400_000).toISOString();
 
     const { data, error } = await supabaseAdmin
       .from("v_correlations_ready")
       .select(
-        "workout_id, started_at, split_name, tonnage, sets_count, tonnage_z, pre_bpm, pre_energy, pre_valence, pre_top_genre, mood_delta"
+        "workout_id, started_at, split_name, tonnage, sets_count, tonnage_z, pre_energy, pre_valence, pre_top_genre, pre_top_artist, mood_delta"
       )
       .eq("user_id", userId)
       .gte("started_at", since)
@@ -26,6 +28,8 @@ export async function GET(req: Request) {
 
     const daysMap = new Map<string, any[]>();
     for (const r of data || []) {
+      if (genre && (r.pre_top_genre || "") !== genre) continue;
+      if (artist && (r.pre_top_artist || "") !== artist) continue;
       const d = new Date(r.started_at);
       const key = d.toISOString().slice(0, 10);
       const arr = daysMap.get(key) || [];
@@ -37,11 +41,10 @@ export async function GET(req: Request) {
         sets: r.sets_count,
         z: r.tonnage_z,
         pre: {
-          bpm: r.pre_bpm,
-          band: bpmBand(r.pre_bpm),
           energy: r.pre_energy,
           valence: r.pre_valence,
           genre: r.pre_top_genre,
+          artist: r.pre_top_artist,
         },
         mood_delta: r.mood_delta,
       });

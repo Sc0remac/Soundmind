@@ -91,7 +91,7 @@ export async function upsertAccount(user_id: string, fields: Record<string, any>
 
 export async function fetchRecentlyPlayed(access_token: string, afterMs?: number) {
   const url = new URL("https://api.spotify.com/v1/me/player/recently-played");
-  url.searchParams.set("limit", "50");
+  url.searchParams.set("limit", "200");
   if (afterMs) url.searchParams.set("after", String(afterMs));
   const r = await fetch(url.toString(), {
     headers: { Authorization: `Bearer ${access_token}` },

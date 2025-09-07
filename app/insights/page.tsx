@@ -1,36 +1,44 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 
 type SummaryRes = {
-  filters: { days: number; split: string | null; sample: number };
+  filters: { days: number; split: string | null; genre: string | null; artist: string | null; sample: number };
   cards: {
     music_to_performance: { headline: string; uplift: number | null; n: number; confidence: "low"|"medium"|"high" };
     music_to_mood: { headline: string; uplift: number | null; n: number; confidence: "low"|"medium"|"high" };
-    best_bpm_band: { band: string; uplift: number; n: number } | null;
+    top_artist_performance: { artist: string; uplift: number; n: number } | null;
+    top_genre_mood: { genre: string; uplift: number; n: number } | null;
     best_time_of_day: { bucket: string; uplift: number; n: number } | null;
     top_genres: { genre: string; perf: number; mood: number; n: number }[];
+    top_artists: { artist: string; perf: number; mood: number; n: number }[];
   };
 };
 
-type SoundCell = { bpm: string; energy: "low"|"mid"|"high"; count: number; perf: number; mood: number };
+type SoundCell = { label: string; energy: "low" | "mid" | "high"; count: number; perf: number; mood: number };
 
 export default function InsightsPage() {
   const [days, setDays] = useState(30);
   const [split, setSplit] = useState<string | null>(null);
+  const [genre, setGenre] = useState<string | null>(null);
+  const [artist, setArtist] = useState<string | null>(null);
+  const [mapMode, setMapMode] = useState<"genre" | "artist">("genre");
 
   const [summary, setSummary] = useState<SummaryRes | null>(null);
   const [map, setMap] = useState<SoundCell[] | null>(null);
   const [timeline, setTimeline] = useState<any[] | null>(null);
   const [loading, setLoading] = useState(false);
+  const energyLevels = ["low", "mid", "high"] as const;
 
   const filtersQS = useMemo(() => {
     const p = new URLSearchParams();
     p.set("days", String(days));
     if (split) p.set("split", split);
+    if (genre) p.set("genre", genre);
+    if (artist) p.set("artist", artist);
     return p.toString();
-  }, [days, split]);
+  }, [days, split, genre, artist]);
 
   useEffect(() => {
     (async () => {
@@ -41,8 +49,8 @@ export default function InsightsPage() {
 
       const [s, m, t] = await Promise.all([
         fetch(`/api/insights/summary?${filtersQS}`, { headers }).then((r) => r.json()),
-        fetch(`/api/insights/soundmap?days=${days}`, { headers }).then((r) => r.json()),
-        fetch(`/api/insights/timeline?days=${days}`, { headers }).then((r) => r.json()),
+        fetch(`/api/insights/soundmap?${filtersQS}&mode=${mapMode}`, { headers }).then((r) => r.json()),
+        fetch(`/api/insights/timeline?${filtersQS}`, { headers }).then((r) => r.json()),
       ]);
 
       setSummary(s);
@@ -50,13 +58,13 @@ export default function InsightsPage() {
       setTimeline(t?.items || []);
       setLoading(false);
     })();
-  }, [filtersQS, days]);
+  }, [filtersQS, mapMode]);
 
   return (
     <div className="p-4 md:p-6 space-y-6">
       <div className="flex items-center gap-3 flex-wrap">
         <h1 className="text-2xl font-semibold">Insights</h1>
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex items-center gap-2 flex-wrap">
           <select className="border rounded p-2" value={days} onChange={(e)=>setDays(Number(e.target.value))}>
             <option value={7}>Last 7 days</option>
             <option value={30}>Last 30 days</option>
@@ -68,64 +76,140 @@ export default function InsightsPage() {
             <option>Upper</option><option>Lower</option><option>Arms</option><option>Back</option>
             <option>Full Body</option>
           </select>
+          <select className="border rounded p-2" value={genre ?? ""} onChange={(e)=>{setGenre(e.target.value || null); setArtist(null); setMapMode("genre");}}>
+            <option value="">All genres</option>
+            {summary?.cards.top_genres?.map((g)=>(
+              <option key={g.genre} value={g.genre}>{g.genre}</option>
+            ))}
+          </select>
+          <select className="border rounded p-2" value={artist ?? ""} onChange={(e)=>setArtist(e.target.value || null)}>
+            <option value="">All artists</option>
+            {summary?.cards.top_artists?.map((a)=>(
+              <option key={a.artist} value={a.artist}>{a.artist}</option>
+            ))}
+          </select>
         </div>
       </div>
 
       {/* Top tiles */}
       <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <Tile
-          title="Music → Performance"
+          title="Music & Workouts"
           subtitle={summary?.cards.music_to_performance.headline || ""}
           value={fmtDelta(summary?.cards.music_to_performance.uplift)}
           tag={confBadge(summary?.cards.music_to_performance.confidence)}
         />
         <Tile
-          title="Music → Mood"
+          title="Music & Mood"
           subtitle={summary?.cards.music_to_mood.headline || ""}
           value={fmtDelta(summary?.cards.music_to_mood.uplift)}
           tag={confBadge(summary?.cards.music_to_mood.confidence)}
         />
         <Tile
-          title="Best BPM band"
-          value={summary?.cards.best_bpm_band ? `${summary.cards.best_bpm_band.band} (${fmtDelta(summary.cards.best_bpm_band.uplift)})` : "—"}
-          subtitle={summary?.cards.best_bpm_band ? `n=${summary.cards.best_bpm_band.n}` : ""}
+          title="Top artist for workouts"
+          value={summary?.cards.top_artist_performance?.artist || "—"}
+          subtitle={summary?.cards.top_artist_performance ? `impact ${fmtDelta(summary.cards.top_artist_performance.uplift)} · sessions ${summary.cards.top_artist_performance.n}` : ""}
         />
         <Tile
-          title="Best time"
-          value={summary?.cards.best_time_of_day ? `${summary.cards.best_time_of_day.bucket} (${fmtDelta(summary.cards.best_time_of_day.uplift)})` : "—"}
-          subtitle={summary?.cards.best_time_of_day ? `n=${summary.cards.best_time_of_day.n}` : ""}
+          title="Top genre for mood"
+          value={summary?.cards.top_genre_mood?.genre || "—"}
+          subtitle={summary?.cards.top_genre_mood ? `lift ${fmtDelta(summary.cards.top_genre_mood.uplift)} · sessions ${summary.cards.top_genre_mood.n}` : ""}
         />
       </div>
+      {summary?.cards.best_time_of_day && (
+        <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <Tile
+            title="Best time"
+            value={summary.cards.best_time_of_day ? `${summary.cards.best_time_of_day.bucket}` : "—"}
+            subtitle={summary.cards.best_time_of_day ? `sessions ${summary.cards.best_time_of_day.n} · impact ${fmtDelta(summary.cards.best_time_of_day.uplift)}` : ""}
+          />
+        </div>
+      )}
 
       {/* Genre chips */}
-      <Card title="Genres that help you most">
+      <Card title="Genre breakdown">
         <div className="flex flex-wrap gap-2">
           {summary?.cards.top_genres?.map((g) => (
-            <div key={g.genre} className="px-3 py-2 rounded-full border text-sm">
+            <div
+              key={g.genre}
+              className="px-3 py-2 rounded-full border text-sm cursor-pointer"
+              onClick={() => {
+                setGenre(g.genre);
+                setMapMode("artist");
+                setArtist(null);
+              }}
+            >
               <span className="font-medium">{g.genre}</span>{" "}
-              <span className="text-gray-500">perf {fmtDelta(g.perf)}, mood {fmtDelta(g.mood)} · n={g.n}</span>
+              <span className="text-gray-500">workout {fmtDelta(g.perf)}, mood {fmtDelta(g.mood)} · {g.n} sessions</span>
+            </div>
+          )) || <div className="text-sm text-gray-500">Not enough data yet.</div>}
+        </div>
+      </Card>
+
+      {/* Artist chips */}
+      <Card title="Artist breakdown">
+        <div className="flex flex-wrap gap-2">
+          {summary?.cards.top_artists?.map((a) => (
+            <div key={a.artist} className="px-3 py-2 rounded-full border text-sm">
+              <span className="font-medium">{a.artist}</span>{" "}
+              <span className="text-gray-500">workout {fmtDelta(a.perf)}, mood {fmtDelta(a.mood)} · {a.n} sessions</span>
             </div>
           )) || <div className="text-sm text-gray-500">Not enough data yet.</div>}
         </div>
       </Card>
 
       {/* Sound & sweat map */}
-      <Card title="Your sound & sweat map" subtitle="BPM × Energy → average performance/mood">
-        <div className="grid grid-cols-4 md:grid-cols-7 gap-2">
-          <CellHeader />
-          {["<110","110–127","128–135",">135"].map((bpm) => (
-            <div key={bpm} className="text-xs text-gray-500 text-center">{bpm}</div>
-          ))}
-          {["low","mid","high"].map((en) => (
-            <>
-              <div key={`${en}-head`} className="text-xs text-gray-500">{en.toUpperCase()}</div>
-              {["<110","110–127","128–135",">135"].map((bpm) => {
-                const cell = map?.find((c)=>c.bpm===bpm && c.energy===en);
-                return <HeatCell key={`${en}-${bpm}`} cell={cell} />;
-              })}
-            </>
-          ))}
-        </div>
+      <Card
+        title="Your sound & sweat map"
+        subtitle={`${mapMode === "genre" ? "Genre" : "Artist"} × Energy → average workout/mood`}
+      >
+        {(() => {
+          const labels = Array.from(new Set(map?.map((c) => c.label) || []));
+          return (
+            <div
+              className="grid gap-2"
+              style={{ gridTemplateColumns: `repeat(${energyLevels.length + 1}, minmax(0,1fr))` }}
+            >
+              <CellHeader />
+              {energyLevels.map((e) => (
+                <div key={e} className="text-xs text-gray-500 text-center">
+                  {e.toUpperCase()}
+                </div>
+              ))}
+              {labels.map((label) => (
+                <Fragment key={label}>
+                  <div
+                    className="text-xs text-gray-500 cursor-pointer"
+                    onClick={() => {
+                      if (mapMode === "genre") {
+                        setGenre(label);
+                        setMapMode("artist");
+                        setArtist(null);
+                      }
+                    }}
+                  >
+                    {label}
+                  </div>
+                  {energyLevels.map((en) => {
+                    const cell = map?.find((c) => c.label === label && c.energy === en);
+                    return <HeatCell key={`${label}-${en}`} cell={cell} />;
+                  })}
+                </Fragment>
+              ))}
+            </div>
+          );
+        })()}
+        {mapMode === "artist" && (
+          <button
+            className="text-xs text-blue-600 mt-2"
+            onClick={() => {
+              setGenre(null);
+              setMapMode("genre");
+            }}
+          >
+            Back to genres
+          </button>
+        )}
       </Card>
 
       {/* Timeline digest */}
@@ -139,12 +223,13 @@ export default function InsightsPage() {
                   <div key={s.id} className="flex items-center gap-3 text-sm">
                     <span className="px-2 py-1 rounded bg-gray-100">{s.split || "—"}</span>
                     <span>{fmtTime(s.time)}</span>
-                    <span>tonnage {Math.round(s.tonnage || 0)}</span>
+                    <span>effort {Math.round(s.tonnage || 0)}</span>
                     <span className="text-gray-500">sets {s.sets}</span>
-                    <span className="text-gray-700">pre:
-                      {s.pre.band ? ` ${s.pre.band} BPM` : ""}{s.pre.energy!=null ? ` · energy ${s.pre.energy.toFixed(2)}`:""}{s.pre.genre ? ` · ${s.pre.genre}`:""}
+                    <span className="text-gray-700">
+                      before: {s.pre.artist ? `${s.pre.artist}${s.pre.genre ? ` · ${s.pre.genre}` : ""}` : s.pre.genre || ""}
                     </span>
-                    <span className={`ml-auto ${s.mood_delta>0?'text-green-700':s.mood_delta<0?'text-red-700':'text-gray-600'}`}>
+                    <span className={`${s.z>0?'text-green-700':s.z<0?'text-red-700':'text-gray-600'}`}>workout {fmtDelta(s.z)}</span>
+                    <span className={`ml-auto ${s.mood_delta>0?'text-green-700':s.mood_delta<0?'text-red-700':'text-gray-600'}`}> 
                       mood {fmtDelta(s.mood_delta)}
                     </span>
                   </div>
@@ -153,6 +238,18 @@ export default function InsightsPage() {
             </div>
           )) || <div className="text-sm text-gray-500">No sessions in range.</div>}
         </div>
+      </Card>
+
+      {/* Actionable insights */}
+      <Card title="Takeaways">
+        <ul className="list-disc list-inside text-sm space-y-1">
+          {summary?.cards.top_artist_performance && (
+            <li>Songs from {summary.cards.top_artist_performance.artist} have lined up with stronger workouts.</li>
+          )}
+          {summary?.cards.top_genre_mood && (
+            <li>{summary.cards.top_genre_mood.genre} tracks often pair with brighter moods.</li>
+          )}
+        </ul>
       </Card>
 
       {loading && <div className="text-sm text-gray-500">Updating…</div>}
@@ -210,7 +307,7 @@ function HeatCell({ cell }:{ cell?: SoundCell }) {
   return (
     <div className="h-14 rounded border flex flex-col items-center justify-center" style={{ background: bg }}>
       <div className="text-sm font-medium">{fmtDelta(cell.perf)}</div>
-      <div className="text-[11px] text-gray-600">{cell.count} · mood {fmtDelta(cell.mood)}</div>
+      <div className="text-[11px] text-gray-600">{cell.count} sessions · mood {fmtDelta(cell.mood)}</div>
     </div>
   );
 }
