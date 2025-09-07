@@ -21,6 +21,16 @@
       "static/chunks/main-app.js",
       "static/chunks/app/music/page.js"
     ],
+    "/log-mood/page": [
+      "static/chunks/webpack.js",
+      "static/chunks/main-app.js",
+      "static/chunks/app/log-mood/page.js"
+    ],
+    "/timeline/page": [
+      "static/chunks/webpack.js",
+      "static/chunks/main-app.js",
+      "static/chunks/app/timeline/page.js"
+    ],
     "/insights/page": [
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",

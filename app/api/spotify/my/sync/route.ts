@@ -99,7 +99,7 @@ export async function POST(req: Request) {
     }
 
     // 5) Fetch recently played
-    const apiUrl = `https://api.spotify.com/v1/me/player/recently-played?limit=200${afterParam}`;
+    const apiUrl = `https://api.spotify.com/v1/me/player/recently-played?limit=50${afterParam}`;
     const spRes = await fetch(apiUrl, { headers: { Authorization: `Bearer ${accessToken}` } });
     if (!spRes.ok) {
       const text = await spRes.text();
