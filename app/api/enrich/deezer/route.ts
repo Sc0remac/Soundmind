@@ -29,7 +29,10 @@ export async function POST() {
     // need the existing name to satisfy NOT NULL during upsert
     .select("id,name,isrc,tempo,bpm,gain,deezer_track_id,meta_provider")
     .not("isrc", "is", null)
-    .or("tempo.is.null,bpm.is.null,gain.is.null,deezer_track_id.is.null")
+    // some rows may have zero values rather than null; treat 0 as missing
+    .or(
+      "tempo.is.null,tempo.eq.0,bpm.is.null,bpm.eq.0,gain.is.null,gain.eq.0,deezer_track_id.is.null"
+    )
     .limit(200);
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
