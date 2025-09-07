@@ -46,7 +46,9 @@ function buildWorkoutSets() {
 }
 
 async function seed() {
-  const { data: { user } } = await supabase.auth.admin.getUserByEmail(userEmail)
+  const { data, error } = await supabase.auth.admin.listUsers()
+  if (error) throw error
+  const user = data.users.find((u) => u.email?.toLowerCase() === userEmail.toLowerCase())
   if (!user) throw new Error('User not found')
 
   const today = new Date()
