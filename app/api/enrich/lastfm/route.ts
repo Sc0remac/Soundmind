@@ -38,7 +38,7 @@ const TAG_ALIAS: Record<string, string> = {
   trap: "trap",
   dance: "dance",
   "r&b": "rnb",
-  "rnb": "rnb",
+  rnb: "rnb",
 };
 
 // Heuristic maps for deriving energy/valence from tags.
@@ -207,30 +207,24 @@ export async function POST() {
     );
   }
 
-  // 1) Get the last 100 listened track IDs
-  const { data: listens, error: lErr } = await supabaseAdmin
-    .from("spotify_listens")
-    .select("track_id")
-    .order("played_at", { ascending: false })
+  // 1) Find up to 100 tracks that lack genre metadata
+  const { data: tracks, error: tErr } = await supabaseAdmin
+    .from("spotify_tracks")
+    .select("id,name,genre_primary,genre_tags,artist_name")
+    .or("genre_primary.is.null,genre_tags.is.null")
     .limit(100);
-  if (lErr) return NextResponse.json({ ok: false, error: lErr.message }, { status: 500 });
+  if (tErr) return NextResponse.json({ ok: false, error: tErr.message }, { status: 500 });
+  const trackRows = tracks as TrackRow[] | null;
+  if (!trackRows?.length)
+    return NextResponse.json({ ok: true, updated: 0, processed: 0, note: "No tracks need tags" });
 
-  const ids = Array.from(
-    new Set((listens as { track_id: string }[] | null | undefined)?.map((r) => r.track_id) || [])
-  ).slice(0, 100);
-  if (ids.length === 0) return NextResponse.json({ ok: true, updated: 0, note: "No recent listens" });
+  const ids = trackRows.map((t) => t.id);
 
-  // 2) Fetch tracks + artists
-  const [{ data: tracks, error: tErr }, { data: links }, { data: artists }] = await Promise.all([
-    supabaseAdmin
-      .from("spotify_tracks")
-      .select("id,name,genre_primary,genre_tags,artist_name")
-      .in("id", ids),
+  // 2) Fetch track-artist links and artist names
+  const [{ data: links }, { data: artists }] = await Promise.all([
     supabaseAdmin.from("spotify_track_artists").select("track_id,artist_id").in("track_id", ids),
     supabaseAdmin.from("spotify_artists").select("id,name"),
   ] as const);
-
-  if (tErr) return NextResponse.json({ ok: false, error: tErr.message }, { status: 500 });
 
   const artistMap = new Map<string, string>();
   (artists as ArtistRow[] | null | undefined)?.forEach((a) => artistMap.set(a.id, a.name));
@@ -247,7 +241,7 @@ export async function POST() {
   let updated = 0;
   const results: any[] = [];
 
-  for (const tr of tracks as TrackRow[]) {
+  for (const tr of trackRows) {
     let artistsForTrack = trackArtists.get(tr.id) || [];
     if ((!artistsForTrack || artistsForTrack.length === 0) && tr.artist_name) {
       artistsForTrack = String(tr.artist_name)

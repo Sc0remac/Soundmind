@@ -168,6 +168,9 @@ export async function POST(req: Request) {
           duration_ms: t.duration_ms ?? null,
           explicit: typeof t.explicit === "boolean" ? t.explicit : null,
           isrc: t.external_ids?.isrc || null,
+          artist_name: Array.isArray(t.artists)
+            ? t.artists.map((a) => a.name).filter(Boolean).join(", ")
+            : null,
           meta_provider: {
             spotify_track: true,
           },
