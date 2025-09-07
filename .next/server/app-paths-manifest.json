@@ -1,10 +1,14 @@
 {
-  "/_not-found/page": "app/_not-found/page.js",
   "/profile/page": "app/profile/page.js",
-  "/page": "app/page.js",
+  "/api/spotify/start/route": "app/api/spotify/start/route.js",
+  "/api/spotify/callback/route": "app/api/spotify/callback/route.js",
+  "/api/spotify/my/attach/route": "app/api/spotify/my/attach/route.js",
   "/api/spotify/my/reset-cursor/route": "app/api/spotify/my/reset-cursor/route.js",
   "/api/spotify/my/sync/route": "app/api/spotify/my/sync/route.js",
+  "/api/enrich/run/route": "app/api/enrich/run/route.js",
+  "/api/enrich/isrc/route": "app/api/enrich/isrc/route.js",
+  "/api/enrich/deezer/route": "app/api/enrich/deezer/route.js",
+  "/api/enrich/lastfm/route": "app/api/enrich/lastfm/route.js",
   "/music/page": "app/music/page.js",
-  "/api/music/list/route": "app/api/music/list/route.js",
-  "/insights/page": "app/insights/page.js"
+  "/api/music/list/route": "app/api/music/list/route.js"
 }
