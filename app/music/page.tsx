@@ -1,112 +1,262 @@
+// app/music/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import {
+  Card,
+  CardBody,
+  CardHeader,
+  Button,
+  Input,
+  Chip,
+  Divider,
+  Avatar,
+  Spinner,
+} from "@nextui-org/react";
+import { Music2, Link as LinkIcon } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
 
-
-type Row = {
-  id: string;
-  track_id: string;
+type Listen = {
   played_at: string;
-  track_name: string;
-  artist_name: string | null;
-  album_image_url: string | null;
-  bpm: number | null;
-  energy: number | null;
-  valence: number | null;
-  genre: string | null;
-  genre_primary: string | null;
-  genre_tags: string[] | null;
+  track_name?: string | null;
+  artist_name?: string | null;
+  album_name?: string | null;
+  bpm?: number | null;
+  energy?: number | null; // 0..1 expected if present
+  source?: string | null;
+  track_uri?: string | null; // e.g. spotify:track:ID
+  image_url?: string | null;
 };
 
-export default function MusicPage() {
-  const [rows, setRows] = useState<Row[]>([]);
-  const [q, setQ] = useState("");
-
-  async function load() {
-    const { data: session } = await supabase.auth.getSession();
-    const token = session.session?.access_token;
-    const res = await fetch("/api/music/list", {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    });
-    const j = await res.json();
-    if (res.ok) setRows(j.rows || []);
-    else console.error("music/list error", j);
+function toEnergyBucket(energy?: number | null, bpm?: number | null) {
+  if (energy != null && !Number.isNaN(energy)) {
+    if (energy < 0.33) return "low";
+    if (energy < 0.66) return "mid";
+    return "high";
   }
+  if (bpm != null && !Number.isNaN(bpm)) {
+    if (bpm < 110) return "low";
+    if (bpm < 128) return "mid";
+    return "high";
+  }
+  return null;
+}
+
+function spotifyTrackUrlFromUri(uri?: string | null) {
+  if (!uri) return null;
+  // spotify:track:ID
+  const parts = uri.split(":");
+  if (parts.length === 3 && parts[1] === "track") {
+    return `https://open.spotify.com/track/${parts[2]}`;
+  }
+  return null;
+}
+
+function fallbackSpotifySearch(track?: string | null, artist?: string | null) {
+  const q = [track, artist].filter(Boolean).join(" ");
+  return q ? `https://open.spotify.com/search/${encodeURIComponent(q)}` : null;
+}
+
+function timeAgo(iso: string) {
+  const d = new Date(iso);
+  const s = Math.floor((Date.now() - d.getTime()) / 1000);
+  if (s < 60) return `${s}s ago`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const dys = Math.floor(h / 24);
+  return `${dys}d ago`;
+}
+
+export default function MusicPage() {
+  const [query, setQuery] = useState("");
+  const [list, setList] = useState<Listen[]>([]);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    load();
+    (async () => {
+      setLoading(true);
+      // Best-effort: view may expose different names; select '*' then map.
+      const { data, error } = await supabase
+        .from("v_spotify_listens_expanded")
+        .select("*")
+        .order("played_at", { ascending: false })
+        .limit(100);
+
+      if (error) {
+        // Soft-fail: just show an empty state; you can toast if you have a toaster.
+        setList([]);
+        setLoading(false);
+        return;
+      }
+
+      const rows = (data || []) as any[];
+      const mapped: Listen[] = rows.map((r) => ({
+        played_at: r.played_at || r.listened_at || r.timestamp,
+        track_name: r.track_name || r.name || r.title,
+        artist_name: r.artist_name || r.artist || r.primary_artist,
+        album_name: r.album_name || r.album,
+        bpm: r.bpm || r.tempo || null,
+        energy: r.energy ?? r.energy_score ?? null,
+        source: r.source || "Spotify",
+        track_uri: r.track_uri || r.spotify_uri || null,
+        image_url:
+          r.image_url ||
+          r.album_image_url ||
+          r.cover_url ||
+          r.artwork_url ||
+          r.track_image_url ||
+          null,
+      }));
+      setList(mapped);
+      setLoading(false);
+    })();
   }, []);
 
   const filtered = useMemo(() => {
-    if (!q) return rows;
-    const qq = q.toLowerCase();
-    return rows.filter((r) => {
-      const tags = (r.genre_tags || []).join(",").toLowerCase();
+    if (!query) return list;
+    const q = query.toLowerCase();
+    return list.filter((x) => {
       return (
-        r.track_name.toLowerCase().includes(qq) ||
-        (r.artist_name || "").toLowerCase().includes(qq) ||
-        (r.genre || "").toLowerCase().includes(qq) ||
-        (r.genre_primary || "").toLowerCase().includes(qq) ||
-        tags.includes(qq)
+        (x.track_name || "").toLowerCase().includes(q) ||
+        (x.artist_name || "").toLowerCase().includes(q) ||
+        (x.album_name || "").toLowerCase().includes(q)
       );
     });
-  }, [rows, q]);
+  }, [list, query]);
 
   return (
-    <div className="max-w-5xl mx-auto p-6 space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">My Music</h1>
+    <div className="space-y-6">
+      <div className="flex items-end justify-between gap-3 flex-wrap">
+        <h1 className="text-2xl font-semibold">Music</h1>
         <div className="flex items-center gap-2">
-          <input
-            className="border rounded px-3 py-2 w-80"
-            placeholder="Search track, artist, or genre…"
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-          />
-          <a
-            className="px-3 py-2 rounded bg-black text-white"
-            href="/profile"
-            title="Go to profile to sync / enrich"
+          <Button
+            as="a"
+            href="/api/spotify/start"
+            color="primary"
+            variant="solid"
+            startContent={<Music2 size={16} />}
           >
-            Enrich metadata
-          </a>
+            Connect Spotify
+          </Button>
+          <Button as="a" href="/api/spotify/my/sync" variant="flat">
+            Sync plays
+          </Button>
         </div>
       </div>
 
-      {!filtered.length ? (
-        <p className="text-sm text-gray-500">No plays found.</p>
-      ) : (
-        <ul className="space-y-3">
-          {filtered.map((r) => (
-            <li key={r.id} className="flex items-center gap-3 border rounded-lg p-3">
-              <img
-                src={r.album_image_url || "/placeholder.png"}
-                alt=""
-                className="h-12 w-12 rounded object-cover bg-gray-100"
-                onError={(e) => ((e.target as HTMLImageElement).style.visibility = "hidden")}
-              />
-              <div className="min-w-0 flex-1">
-                <div className="font-medium truncate">{r.track_name}</div>
-                <div className="text-xs text-gray-500 truncate">
-                  {new Date(r.played_at).toLocaleString()} • {r.artist_name || "—"}
-                </div>
-              </div>
-              <div className="text-xs text-gray-600 text-right">
-                {r.genre_primary ? <div>Genre: {r.genre_primary}</div> : null}
-                {r.genre_tags && r.genre_tags.filter((g) => g !== r.genre_primary).length ? (
-                  <div>
-                    Sub-genre: {r.genre_tags.filter((g) => g !== r.genre_primary).join(", ")}
-                  </div>
-                ) : null}
-                {r.bpm ? <div>BPM: {Math.round(r.bpm)}</div> : null}
-                {r.energy != null ? <div>Energy: {r.energy.toFixed(2)}</div> : null}
-                {r.valence != null ? <div>Valence: {r.valence.toFixed(2)}</div> : null}
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
+      <Card className="shadow-md">
+        <CardHeader className="justify-between">
+          <div className="flex items-center gap-2">
+            <Music2 size={18} />
+            <div className="font-medium">Recent listens</div>
+          </div>
+          <Input
+            placeholder="Search tracks, artists, albums"
+            value={query}
+            onValueChange={setQuery}
+            className="w-72 max-w-full"
+          />
+        </CardHeader>
+        <Divider />
+        <CardBody className="space-y-2">
+          {loading ? (
+            <div className="flex items-center justify-center py-10">
+              <Spinner label="Loading your recent plays…" />
+            </div>
+          ) : filtered.length === 0 ? (
+            <EmptyState />
+          ) : (
+            <div className="divide-y divide-default-200/60">
+              {filtered.map((t, idx) => (
+                <TrackRow key={`${t.played_at}-${idx}`} item={t} />
+              ))}
+            </div>
+          )}
+        </CardBody>
+      </Card>
+    </div>
+  );
+}
+
+/* ---------------- Components ---------------- */
+
+function TrackRow({ item }: { item: Listen }) {
+  const energyBucket = toEnergyBucket(item.energy ?? null, item.bpm ?? null);
+
+  const spotifyUrl =
+    spotifyTrackUrlFromUri(item.track_uri) ||
+    fallbackSpotifySearch(item.track_name, item.artist_name);
+
+  const energyChip =
+    energyBucket === "high"
+      ? { label: "High", color: "success" as const }
+      : energyBucket === "mid"
+      ? { label: "Mid", color: "warning" as const }
+      : energyBucket === "low"
+      ? { label: "Low", color: "default" as const }
+      : null;
+
+  return (
+    <div className="flex items-center gap-3 py-3">
+      <Avatar
+        radius="sm"
+        className="shrink-0"
+        src={item.image_url || undefined}
+        name={(item.track_name || "?").charAt(0)}
+      />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2 min-w-0">
+          <div className="font-medium truncate">{item.track_name || "Unknown track"}</div>
+          <div className="text-default-500 truncate">· {item.artist_name || "Unknown artist"}</div>
+        </div>
+        <div className="text-xs text-default-500 truncate">
+          {item.album_name || "—"} • {timeAgo(item.played_at)}
+        </div>
+      </div>
+      <div className="hidden sm:flex items-center gap-2">
+        {item.bpm ? (
+          <Chip size="sm" variant="flat">
+            {Math.round(item.bpm)} BPM
+          </Chip>
+        ) : null}
+        {item.energy != null ? (
+          <Chip size="sm" variant="flat">
+            Energy {Math.round((item.energy || 0) * 100)}
+          </Chip>
+        ) : null}
+        {energyChip ? (
+          <Chip size="sm" color={energyChip.color} variant="flat">
+            {energyChip.label}
+          </Chip>
+        ) : null}
+        <Chip size="sm" variant="bordered">
+          {item.source || "Spotify"}
+        </Chip>
+      </div>
+      {spotifyUrl ? (
+        <Button
+          as="a"
+          href={spotifyUrl}
+          target="_blank"
+          rel="noreferrer"
+          size="sm"
+          variant="light"
+          startContent={<LinkIcon size={14} />}
+          className="ml-2"
+        >
+          Open
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
+function EmptyState() {
+  return (
+    <div className="py-14 text-center text-sm text-default-500">
+      No listens found. Try syncing your plays or refining your search.
     </div>
   );
 }

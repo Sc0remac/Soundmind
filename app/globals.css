@@ -2,15 +2,8 @@
 @tailwind components;
 @tailwind utilities;
 
-html, body {
-  min-height: 100%;
-}
+/* Optional: smooth fonts + helper */
+html, body { height: 100%; }
+body { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
 
-body {
-  @apply bg-white text-gray-900;
-}
-
-/* Utility classes for custom styling */
-.container {
-  @apply mx-auto px-4;
-}
+.shadow-card { box-shadow: 0 8px 30px rgba(0,0,0,0.06); }
