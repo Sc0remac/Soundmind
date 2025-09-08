@@ -1,24 +1,25 @@
 "use client";
 
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 
-/* -------------------- Types -------------------- */
-type SummaryRes = {
+// ---------- Types (from the new /summary) ----------
+type LabelImpact = { label: string; impact: number; n: number };
+type BestTime = { window: string; n: number };
+type SummaryOut = {
   filters: { days: number; split: string | null; genre: string | null; artist: string | null; sample: number };
-  cards: {
-    music_to_performance: { headline: string; uplift: number | null; n: number; confidence: "low" | "medium" | "high" };
-    music_to_mood: { headline: string; uplift: number | null; n: number; confidence: "low" | "medium" | "high" };
-    top_artist_performance: { artist: string; uplift: number; n: number } | null;
-    top_genre_mood: { genre: string; uplift: number; n: number } | null;
-    best_time_of_day: { bucket: string; uplift: number; n: number } | null;
-    top_genres: { genre: string; perf: number; mood: number; n: number }[];
-    top_artists: { artist: string; perf: number; mood: number; n: number }[];
+  headline: {
+    score: number | null;
+    best_time: BestTime | null;
+    recipe: { label: string; type: "genre" | "artist"; energy: "low" | "mid" | "high" | null; bpm: [number, number] | null; impact: number; n: number } | null;
+    copy: { line: string | null };
   };
+  boosters: { genres: LabelImpact[]; artists: LabelImpact[] };
+  drainers: { genres: LabelImpact[]; artists: LabelImpact[] };
+  recommendations: { play_url: string | null; notes: string };
 };
 
-type SoundCell = { label: string; energy: "low" | "mid" | "high"; count: number; perf: number; mood: number };
-
+// ---------- Timeline (reuses your existing API) ----------
 type ApiTimelineSession = {
   workout_id: string;
   started_at: string;
@@ -31,11 +32,10 @@ type ApiTimelineSession = {
   mood_delta: number | null;
 };
 type ApiTimelineItem = { date: string; sessions: ApiTimelineSession[] };
-
 type UiSession = {
   id: string;
   split: string | null;
-  time: string; // ISO
+  time: string;
   tonnage: number | null;
   sets: number | null;
   pre: { artist: string | null; genre: string | null };
@@ -44,7 +44,6 @@ type UiSession = {
 };
 type UiTimelineItem = { date: string; sessions: UiSession[] };
 
-/* Transform API → UI shape so the renderer never crashes on undefined */
 function toUiTimeline(items: ApiTimelineItem[] | undefined | null): UiTimelineItem[] {
   if (!items || !Array.isArray(items)) return [];
   return items.map((d) => ({
@@ -55,38 +54,91 @@ function toUiTimeline(items: ApiTimelineItem[] | undefined | null): UiTimelineIt
       time: s.started_at,
       tonnage: typeof s.tonnage === "number" ? s.tonnage : null,
       sets: typeof s.sets_count === "number" ? s.sets_count : null,
-      pre: {
-        artist: s.pre_top_artist ?? null,
-        genre: s.pre_top_genre ?? null,
-      },
+      pre: { artist: s.pre_top_artist ?? null, genre: s.pre_top_genre ?? null },
       z: typeof s.tonnage_z === "number" ? s.tonnage_z : null,
       mood_delta: typeof s.mood_delta === "number" ? s.mood_delta : null,
     })),
   }));
 }
 
-/* -------------------- Component -------------------- */
+// ---------- Small helpers ----------
+function fmtDelta(x?: number | null) {
+  if (x == null || isNaN(x as any)) return "—";
+  const sign = (x as number) > 0 ? "+" : "";
+  return `${sign}${(x as number).toFixed(2)}`;
+}
+function fmtDate(iso: string) {
+  const d = new Date(iso);
+  return d.toLocaleDateString();
+}
+function fmtTime(iso: string) {
+  const d = new Date(iso);
+  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+// ---------- Bubble component (inline for simplicity) ----------
+function BubbleRow({
+  title,
+  items,
+  colorMode = "impact",
+  emptyText,
+  onPick,
+}: {
+  title: string;
+  items: LabelImpact[];
+  colorMode?: "impact";
+  emptyText?: string;
+  onPick?: (label: string) => void;
+}) {
+  const top = items.slice(0, 6);
+  return (
+    <section className="rounded-xl border bg-white p-4">
+      <div className="mb-2 font-medium">{title}</div>
+      {top.length === 0 ? (
+        <div className="text-sm text-gray-500">{emptyText || "Not enough data yet."}</div>
+      ) : (
+        <div className="flex flex-wrap gap-2">
+          {top.map((x) => {
+            const positive = x.impact >= 0;
+            const intensity = Math.min(1, Math.abs(x.impact) / 1.0); // clamp around 1 SD
+            const hue = positive ? 150 : 0; // green/red
+            const bg = `hsl(${hue} 80% ${92 - 28 * intensity}%)`;
+            const ring = `hsl(${hue} 60% ${70 - 10 * intensity}%)`;
+            const size = Math.min(1, Math.max(0.35, x.n / 12)); // bubble size by n (cap)
+            return (
+              <button
+                key={x.label}
+                className="rounded-full px-3 py-2 border text-sm"
+                style={{ background: bg, borderColor: ring, transform: `scale(${0.85 + 0.3 * size})` }}
+                onClick={() => onPick?.(x.label)}
+                title={`${x.label}: impact ${fmtDelta(x.impact)} · n=${x.n}`}
+              >
+                <span className="font-medium">{x.label}</span>{" "}
+                <span className="text-gray-700">{fmtDelta(x.impact)}</span>
+                <span className="text-gray-500"> · {x.n}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+}
+
 export default function InsightsPage() {
   const [days, setDays] = useState(30);
   const [split, setSplit] = useState<string | null>(null);
-  const [genre, setGenre] = useState<string | null>(null);
-  const [artist, setArtist] = useState<string | null>(null);
-  const [mapMode, setMapMode] = useState<"genre" | "artist">("genre");
 
-  const [summary, setSummary] = useState<SummaryRes | null>(null);
-  const [map, setMap] = useState<SoundCell[] | null>(null);
+  const [summary, setSummary] = useState<SummaryOut | null>(null);
   const [timeline, setTimeline] = useState<UiTimelineItem[] | null>(null);
   const [loading, setLoading] = useState(false);
-  const energyLevels = ["low", "mid", "high"] as const;
 
   const filtersQS = useMemo(() => {
     const p = new URLSearchParams();
     p.set("days", String(days));
     if (split) p.set("split", split);
-    if (genre) p.set("genre", genre);
-    if (artist) p.set("artist", artist);
     return p.toString();
-  }, [days, split, genre, artist]);
+  }, [days, split]);
 
   useEffect(() => {
     (async () => {
@@ -95,18 +147,41 @@ export default function InsightsPage() {
       const token = session.session?.access_token;
       const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
 
-      const [s, m, t] = await Promise.all([
+      const [s, t] = await Promise.all([
         fetch(`/api/insights/summary?${filtersQS}`, { headers }).then((r) => r.json()),
-        fetch(`/api/insights/soundmap?${filtersQS}&mode=${mapMode}`, { headers }).then((r) => r.json()),
         fetch(`/api/insights/timeline?${filtersQS}`, { headers }).then((r) => r.json()),
       ]);
 
-      setSummary(s?.error ? null : (s as SummaryRes));
-      setMap(m?.error ? [] : (m?.cells as SoundCell[]) || []);
-      setTimeline(t?.error ? [] : toUiTimeline(t?.items as ApiTimelineItem[]));
+      setSummary(s?.error ? null : (s as SummaryOut));
+      setTimeline(t?.error ? [] : toUiTimeline(t?.items as ApiTimelineItem[]).slice(0, 5)); // short digest
       setLoading(false);
     })();
-  }, [filtersQS, mapMode]);
+  }, [filtersQS]);
+
+  // simple ICS generator for best-time schedule
+  const icsHref = (() => {
+    const bt = summary?.headline?.best_time;
+    if (!bt) return null;
+    // crude DTSTART: today at start of window's first hour (parse "17–20")
+    const m = /^(\d{2})/.exec(bt.window);
+    const hour = m ? Number(m[1]) : 17;
+    const today = new Date();
+    today.setHours(hour, 0, 0, 0);
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const dt = `${today.getFullYear()}${pad(today.getMonth() + 1)}${pad(today.getDate())}T${pad(today.getHours())}0000`;
+    const ics = [
+      "BEGIN:VCALENDAR",
+      "VERSION:2.0",
+      "PRODID:-//Soundmind//Insights//EN",
+      "BEGIN:VEVENT",
+      `DTSTART:${dt}`,
+      "RRULE:FREQ=WEEKLY",
+      "SUMMARY:Train at your best time",
+      "END:VEVENT",
+      "END:VCALENDAR",
+    ].join("\r\n");
+    return `data:text/calendar;charset=utf-8,${encodeURIComponent(ics)}`;
+  })();
 
   return (
     <div className="p-4 md:p-6 space-y-6">
@@ -129,179 +204,84 @@ export default function InsightsPage() {
             <option>Back</option>
             <option>Full Body</option>
           </select>
-          <select
-            className="border rounded p-2"
-            value={genre ?? ""}
-            onChange={(e) => {
-              setGenre(e.target.value || null);
-              setArtist(null);
-              setMapMode("genre");
-            }}
-          >
-            <option value="">All genres</option>
-            {summary?.cards?.top_genres?.map((g) => (
-              <option key={g.genre} value={g.genre}>
-                {g.genre}
-              </option>
-            ))}
-          </select>
-          <select
-            className="border rounded p-2"
-            value={artist ?? ""}
-            onChange={(e) => setArtist(e.target.value || null)}
-          >
-            <option value="">All artists</option>
-            {summary?.cards?.top_artists?.map((a) => (
-              <option key={a.artist} value={a.artist}>
-                {a.artist}
-              </option>
-            ))}
-          </select>
         </div>
       </div>
 
-      {/* Top tiles */}
-      <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <Tile
-          title="Music & Workouts"
-          subtitle={summary?.cards?.music_to_performance?.headline || ""}
-          value={fmtDelta(summary?.cards?.music_to_performance?.uplift)}
-          tag={confBadge(summary?.cards?.music_to_performance?.confidence)}
-        />
-        <Tile
-          title="Music & Mood"
-          subtitle={summary?.cards?.music_to_mood?.headline || ""}
-          value={fmtDelta(summary?.cards?.music_to_mood?.uplift)}
-          tag={confBadge(summary?.cards?.music_to_mood?.confidence)}
-        />
-        <Tile
-          title="Top artist for workouts"
-          value={summary?.cards?.top_artist_performance?.artist || "—"}
-          subtitle={
-            summary?.cards?.top_artist_performance
-              ? `impact ${fmtDelta(summary?.cards?.top_artist_performance?.uplift)} · sessions ${summary?.cards?.top_artist_performance?.n}`
-              : ""
-          }
-        />
-        <Tile
-          title="Top genre for mood"
-          value={summary?.cards?.top_genre_mood?.genre || "—"}
-          subtitle={
-            summary?.cards?.top_genre_mood
-              ? `lift ${fmtDelta(summary?.cards?.top_genre_mood?.uplift)} · sessions ${summary?.cards?.top_genre_mood?.n}`
-              : ""
-          }
-        />
-      </div>
-      {summary?.cards?.best_time_of_day && (
-        <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <Tile
-            title="Best time"
-            value={summary?.cards?.best_time_of_day?.bucket || "—"}
-            subtitle={
-              summary?.cards?.best_time_of_day
-                ? `sessions ${summary?.cards?.best_time_of_day?.n} · impact ${fmtDelta(summary?.cards?.best_time_of_day?.uplift)}`
-                : ""
-            }
-          />
-        </div>
-      )}
-
-      {/* Genre chips */}
-      <Card title="Genre breakdown">
-        <div className="flex flex-wrap gap-2">
-          {summary?.cards?.top_genres?.length ? (
-            summary.cards.top_genres.map((g) => (
-              <div
-                key={g.genre}
-                className="px-3 py-2 rounded-full border text-sm cursor-pointer"
-                onClick={() => {
-                  setGenre(g.genre);
-                  setMapMode("artist");
-                  setArtist(null);
-                }}
-              >
-                <span className="font-medium">{g.genre}</span>{" "}
-                <span className="text-gray-500">
-                  workout {fmtDelta(g.perf)}, mood {fmtDelta(g.mood)} · {g.n} sessions
-                </span>
-              </div>
-            ))
-          ) : (
-            <div className="text-sm text-gray-500">Not enough data yet.</div>
-          )}
-        </div>
-      </Card>
-
-      {/* Artist chips */}
-      <Card title="Artist breakdown">
-        <div className="flex flex-wrap gap-2">
-          {summary?.cards?.top_artists?.length ? (
-            summary.cards.top_artists.map((a) => (
-              <div key={a.artist} className="px-3 py-2 rounded-full border text-sm">
-                <span className="font-medium">{a.artist}</span>{" "}
-                <span className="text-gray-500">
-                  workout {fmtDelta(a.perf)}, mood {fmtDelta(a.mood)} · {a.n} sessions
-                </span>
-              </div>
-            ))
-          ) : (
-            <div className="text-sm text-gray-500">Not enough data yet.</div>
-          )}
-        </div>
-      </Card>
-
-      {/* Sound & sweat map */}
-      <Card title="Your sound & sweat map" subtitle={`${mapMode === "genre" ? "Genre" : "Artist"} × Energy → average workout/mood`}>
-        {(() => {
-          const labels = Array.from(new Set(map?.map((c) => c.label) || []));
-          return (
-            <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${energyLevels.length + 1}, minmax(0,1fr))` }}>
-              <CellHeader />
-              {energyLevels.map((e) => (
-                <div key={e} className="text-xs text-gray-500 text-center">
-                  {e.toUpperCase()}
-                </div>
-              ))}
-              {labels.map((label) => (
-                <Fragment key={label}>
-                  <div
-                    className="text-xs text-gray-500 cursor-pointer"
-                    onClick={() => {
-                      if (mapMode === "genre") {
-                        setGenre(label);
-                        setMapMode("artist");
-                        setArtist(null);
-                      }
-                    }}
-                  >
-                    {label}
-                  </div>
-                  {energyLevels.map((en) => {
-                    const cell = map?.find((c) => c.label === label && c.energy === en);
-                    return <HeatCell key={`${label}-${en}`} cell={cell} />;
-                  })}
-                </Fragment>
-              ))}
+      {/* Hero strip */}
+      <section className="rounded-xl border bg-white p-4">
+        <div className="flex flex-col lg:flex-row gap-3 items-start lg:items-center">
+          <div className="flex items-center gap-3">
+            <div className="text-sm text-gray-600">Last {summary?.filters?.days ?? days} days score</div>
+            <div
+              className="px-3 py-1 rounded-full text-sm"
+              style={{
+                background:
+                  summary?.headline?.score != null
+                    ? `hsl(${(summary.headline.score ?? 0) >= 0 ? 150 : 0} 80% ${92 - 20 * Math.min(1, Math.abs(summary.headline.score ?? 0))}%)`
+                    : "var(--gray-50, #f9fafb)",
+              }}
+            >
+              {fmtDelta(summary?.headline?.score)}
             </div>
-          );
-        })()}
-        {mapMode === "artist" && (
-          <button
-            className="text-xs text-blue-600 mt-2"
-            onClick={() => {
-              setGenre(null);
-              setMapMode("genre");
-            }}
-          >
-            Back to genres
-          </button>
-        )}
-      </Card>
+          </div>
 
-      {/* Timeline digest */}
-      <Card title="Recent sessions (digest)">
-        <div className="space-y-4">
+          <div className="flex items-center gap-3">
+            <div className="text-sm text-gray-600">Best time</div>
+            <div className="px-3 py-1 rounded-full text-sm bg-gray-100">
+              {summary?.headline?.best_time ? `${summary.headline.best_time.window} · n=${summary.headline.best_time.n}` : "—"}
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <div className="text-sm text-gray-600">Best recipe</div>
+            <div className="px-3 py-1 rounded-full text-sm bg-gray-100">
+              {summary?.headline?.recipe
+                ? `${summary.headline.recipe.label}${
+                    summary.headline.recipe.energy ? ` (${summary.headline.recipe.energy})` : ""
+                  } · ${fmtDelta(summary.headline.recipe.impact)} · n=${summary.headline.recipe.n}`
+                : "—"}
+            </div>
+          </div>
+
+          <div className="ml-auto text-sm text-gray-600">{summary?.headline?.copy?.line || ""}</div>
+        </div>
+
+        {/* Action buttons */}
+        <div className="mt-3 flex gap-2">
+          {summary?.recommendations?.play_url && (
+            <a
+              href={summary.recommendations.play_url}
+              target="_blank"
+              rel="noreferrer"
+              className="px-3 py-2 rounded-lg border bg-black text-white text-sm"
+            >
+              Play boosters on Spotify
+            </a>
+          )}
+          {icsHref && (
+            <a href={icsHref} download="soundmind-best-time.ics" className="px-3 py-2 rounded-lg border text-sm">
+              Schedule best time
+            </a>
+          )}
+          <span className="ml-auto text-xs text-gray-500">{summary?.recommendations?.notes || ""}</span>
+        </div>
+      </section>
+
+      {/* Boosters / Drainers */}
+      <BubbleRow
+        title="Boosting genres"
+        items={summary?.boosters?.genres || []}
+        onPick={() => {}}
+        emptyText="Log a few more sessions with music to surface winners."
+      />
+      <BubbleRow title="Boosting artists" items={summary?.boosters?.artists || []} />
+      <BubbleRow title="Draining genres" items={summary?.drainers?.genres || []} />
+      <BubbleRow title="Draining artists" items={summary?.drainers?.artists || []} />
+
+      {/* Digest (short) */}
+      <section className="rounded-xl border bg-white p-4">
+        <div className="font-medium mb-2">Recent sessions (digest)</div>
+        <div className="space-y-3">
           {timeline?.length ? (
             timeline.map((d) => (
               <div key={d.date} className="rounded border p-3">
@@ -311,20 +291,14 @@ export default function InsightsPage() {
                     <div key={s.id} className="flex items-center gap-3 text-sm">
                       <span className="px-2 py-1 rounded bg-gray-100">{s.split || "—"}</span>
                       <span>{fmtTime(s.time)}</span>
-                      <span>effort {Math.round(s.tonnage || 0)}</span>
-                      <span className="text-gray-500">sets {s.sets ?? 0}</span>
-                      <span className="text-gray-700">
-                        before: {s.pre?.artist ? `${s.pre.artist}${s.pre?.genre ? ` · ${s.pre.genre}` : ""}` : s.pre?.genre || "—"}
-                      </span>
                       <span className={`${(s.z ?? 0) > 0 ? "text-green-700" : (s.z ?? 0) < 0 ? "text-red-700" : "text-gray-600"}`}>
                         workout {fmtDelta(s.z)}
                       </span>
-                      <span
-                        className={`ml-auto ${
-                          (s.mood_delta ?? 0) > 0 ? "text-green-700" : (s.mood_delta ?? 0) < 0 ? "text-red-700" : "text-gray-600"
-                        }`}
-                      >
+                      <span className={`ml-auto ${ (s.mood_delta ?? 0) > 0 ? "text-green-700" : (s.mood_delta ?? 0) < 0 ? "text-red-700" : "text-gray-600"}`}>
                         mood {fmtDelta(s.mood_delta)}
+                      </span>
+                      <span className="text-gray-700">
+                        {s.pre?.artist ? `${s.pre.artist}${s.pre?.genre ? ` · ${s.pre.genre}` : ""}` : s.pre?.genre || "—"}
                       </span>
                     </div>
                   ))}
@@ -335,83 +309,9 @@ export default function InsightsPage() {
             <div className="text-sm text-gray-500">No sessions in range.</div>
           )}
         </div>
-      </Card>
+      </section>
 
       {loading && <div className="text-sm text-gray-500">Updating…</div>}
     </div>
   );
-}
-
-/* ---------- tiny UI helpers ---------- */
-function Tile({
-  title,
-  subtitle,
-  value,
-  tag,
-}: {
-  title: string;
-  subtitle?: string;
-  value: string;
-  tag?: React.ReactNode;
-}) {
-  return (
-    <div className="rounded-xl border p-4 bg-white">
-      <div className="flex items-start justify-between mb-2">
-        <div className="text-sm text-gray-600">{title}</div>
-        {tag}
-      </div>
-      <div className="text-xl font-semibold">{value}</div>
-      {subtitle && <div className="text-xs text-gray-500 mt-1">{subtitle}</div>}
-    </div>
-  );
-}
-function Card({ title, subtitle, children }: { title: string; subtitle?: string; children: any }) {
-  return (
-    <section className="rounded-xl border bg-white p-4">
-      <div className="mb-3">
-        <div className="font-medium">{title}</div>
-        {subtitle && <div className="text-xs text-gray-500">{subtitle}</div>}
-      </div>
-      {children}
-    </section>
-  );
-}
-function confBadge(level?: "low" | "medium" | "high") {
-  const c =
-    level === "high"
-      ? "bg-green-100 text-green-800"
-      : level === "medium"
-      ? "bg-amber-100 text-amber-800"
-      : "bg-gray-100 text-gray-800";
-  return <span className={`text-xs px-2 py-1 rounded ${c}`}>{level || "—"}</span>;
-}
-function fmtDelta(x?: number | null) {
-  if (x == null || isNaN(x as any)) return "—";
-  const sign = (x as number) > 0 ? "+" : "";
-  return `${sign}${(x as number).toFixed(2)}`;
-}
-function fmtDate(iso: string) {
-  const d = new Date(iso);
-  return d.toLocaleDateString();
-}
-function fmtTime(iso: string) {
-  const d = new Date(iso);
-  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-}
-function CellHeader() {
-  return <div />;
-}
-function HeatCell({ cell }: { cell?: SoundCell }) {
-  if (!cell) return <div className="h-14 rounded border bg-gray-50" />;
-  const hue = cell.perf >= 0 ? 150 : 0; // green vs red
-  const intensity = Math.min(1, Math.abs(cell.perf) / 1.0); // clamp around 1 SD
-  const bg = `hsl(${hue} 80% ${92 - 30 * intensity}%)`;
-  return (
-    <div className="h-14 rounded border flex flex-col items-center justify-center" style={{ background: bg }}>
-      <div className="text-sm font-medium">{fmtDelta(cell.perf)}</div>
-      <div className="text-[11px] text-gray-600">
-        {cell.count} sessions · mood {fmtDelta(cell.mood)}
-      </div>
-    </div>
-  );
-}
+} 

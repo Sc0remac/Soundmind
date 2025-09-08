@@ -1,7 +1,22 @@
 // app/api/insights/summary/route.ts
 import { NextResponse } from "next/server";
 import { getUserAndClient, fetchJoinedRows, energyBucket } from "../_common";
-import { diffInMeans, mean, confidence, bucketHour } from "@/lib/stats";
+import { mean, sd, bucketHour } from "@/lib/stats";
+
+type LabelImpact = { label: string; impact: number; n: number };
+type BestTime = { window: string; n: number };
+
+function clamp(x: number, lo: number, hi: number) {
+  return Math.min(hi, Math.max(lo, x));
+}
+
+/** Map energy bucket to a suggested BPM range for copy */
+function energyToBpmRange(e: "low" | "mid" | "high" | null) {
+  if (e === "low") return [90, 110] as [number, number];
+  if (e === "mid") return [110, 128] as [number, number];
+  if (e === "high") return [128, 145] as [number, number];
+  return null;
+}
 
 export async function GET(req: Request) {
   try {
@@ -14,146 +29,134 @@ export async function GET(req: Request) {
     const artist = searchParams.get("artist");
     const sinceIso = new Date(Date.now() - days * 86400_000).toISOString();
 
+    // Pull sessions with performance + pre-music (and mood if available)
     const rows = await fetchJoinedRows({ client, userId, sinceIso, split, genre, artist });
-    const sample = rows.length;
 
-    // --- Music → Performance (energy high vs low)
-    const highs = rows
-      .filter((r) => energyBucket(r.pre_energy) === "high" && Number.isFinite(r.tonnage_z as any))
-      .map((r) => Number(r.tonnage_z));
-    const lows = rows
-      .filter((r) => energyBucket(r.pre_energy) === "low" && Number.isFinite(r.tonnage_z as any))
-      .map((r) => Number(r.tonnage_z));
-    const perfUplift = highs.length && lows.length ? diffInMeans(highs, lows) : null;
-    const perfHeadline =
-      perfUplift == null
-        ? "Not enough data yet"
-        : perfUplift >= 0
-        ? "High-energy music ↗︎ average performance"
-        : "High-energy music ↘︎ average performance";
-    const perfConf = confidence(Math.min(highs.length, lows.length), Math.abs(perfUplift ?? 0));
+    // ---------- Combined score ----------
+    // We want a single per-session number the UI can reason about:
+    // score = 0.6 * tonnage_z  +  0.4 * mood_delta_z  (if mood present; else 0)
+    // We compute mood_delta_z across the user's data in-range.
+    const perfZ = rows.map((r) => (Number.isFinite(r.tonnage_z as any) ? Number(r.tonnage_z) : null));
+    const moodDelta = rows.map((r) => (Number.isFinite(r.mood_delta as any) ? Number(r.mood_delta) : null));
+    const moodPresent = moodDelta.filter((x) => x != null) as number[];
+    const moodMean = moodPresent.length >= 2 ? mean(moodPresent) : 0;
+    const moodSd = moodPresent.length >= 2 ? sd(moodPresent) : 1;
 
-    // --- Music → Mood (post-pre mood delta)
-    const moodHighs = rows
-      .filter((r) => energyBucket(r.pre_energy) === "high" && Number.isFinite(r.mood_delta as any))
-      .map((r) => Number(r.mood_delta));
-    const moodLows = rows
-      .filter((r) => energyBucket(r.pre_energy) === "low" && Number.isFinite(r.mood_delta as any))
-      .map((r) => Number(r.mood_delta));
-    const moodUplift = moodHighs.length && moodLows.length ? diffInMeans(moodHighs, moodLows) : null;
-    const moodHeadline =
-      moodUplift == null
-        ? "Not enough data yet"
-        : moodUplift >= 0
-        ? "High-energy music linked to ↑ mood post-workout"
-        : "High-energy music linked to ↓ mood post-workout";
-    const moodConf = confidence(Math.min(moodHighs.length, moodLows.length), Math.abs(moodUplift ?? 0));
-
-    // --- Top artist for workouts (mean tonnage_z; n>=3)
-    const byArtist = new Map<string, number[]>();
-    rows.forEach((r) => {
-      const a = (r.pre_top_artist || "").trim();
-      if (!a) return;
-      if (!byArtist.has(a)) byArtist.set(a, []);
-      if (Number.isFinite(r.tonnage_z as any)) byArtist.get(a)!.push(Number(r.tonnage_z));
+    const weights = { perf: 0.6, mood: 0.4 };
+    const scores = rows.map((r, i) => {
+      const p = perfZ[i] ?? 0;
+      const m = moodDelta[i] != null && moodSd > 0 ? (moodDelta[i]! - moodMean) / moodSd : 0;
+      return weights.perf * p + weights.mood * m;
     });
-    const topArtist =
-      [...byArtist.entries()]
-        .map(([artist, arr]) => ({ artist, n: arr.length, perf: mean(arr) }))
+
+    const overallMean = scores.length ? mean(scores) : 0;
+
+    // ---------- Impacts per label ----------
+    const aggBy = <K extends string>(key: K) => {
+      const map = new Map<string, number[]>();
+      rows.forEach((r, i) => {
+        const label = (r as any)[key] as string | null;
+        if (!label) return;
+        if (!map.has(label)) map.set(label, []);
+        map.get(label)!.push(scores[i] ?? 0);
+      });
+      const arr: LabelImpact[] = [...map.entries()].map(([label, arr]) => ({
+        label,
+        impact: +(mean(arr) - overallMean).toFixed(2),
+        n: arr.length,
+      }));
+      arr.sort((a, b) => Math.abs(b.impact) - Math.abs(a.impact) || b.n - a.n);
+      return arr;
+    };
+
+    const byGenre = aggBy("pre_top_genre");
+    const byArtist = aggBy("pre_top_artist");
+
+    const boosters_genres = byGenre.filter((x) => x.impact > 0).slice(0, 6);
+    const boosters_artists = byArtist.filter((x) => x.impact > 0).slice(0, 6);
+    const drainers_genres = byGenre.filter((x) => x.impact < 0).slice(0, 6);
+    const drainers_artists = byArtist.filter((x) => x.impact < 0).slice(0, 6);
+
+    // ---------- Best time window ----------
+    const bucketMap = new Map<string, number[]>();
+    rows.forEach((r, i) => {
+      const bucket = bucketHour(r.started_at);
+      if (!bucketMap.has(bucket)) bucketMap.set(bucket, []);
+      bucketMap.get(bucket)!.push(scores[i] ?? 0);
+    });
+
+    const bestTime: BestTime | null =
+      [...bucketMap.entries()]
+        .map(([window, arr]) => ({ window, n: arr.length, score: mean(arr) }))
         .filter((x) => x.n >= 3)
-        .sort((a, b) => b.perf - a.perf)[0] || null;
+        .sort((a, b) => b.score - a.score)[0] || null;
 
-    // --- Top genre for mood (mean mood_delta; n>=3)
-    const byGenreMood = new Map<string, number[]>();
-    rows.forEach((r) => {
-      const g = (r.pre_top_genre || "").trim();
-      if (!g) return;
-      if (!byGenreMood.has(g)) byGenreMood.set(g, []);
-      if (Number.isFinite(r.mood_delta as any)) byGenreMood.get(g)!.push(Number(r.mood_delta));
+    // ---------- Best "recipe" (friendly suggestion) ----------
+    // Prefer a high-energy genre if we have it; otherwise best overall label.
+    const energyMeans = { low: [] as number[], mid: [] as number[], high: [] as number[] };
+    rows.forEach((r, i) => {
+      const eb = energyBucket(r.pre_energy);
+      if (!eb) return;
+      energyMeans[eb].push(scores[i] ?? 0);
     });
-    const topGenreMood =
-      [...byGenreMood.entries()]
-        .map(([genre, arr]) => ({ genre, n: arr.length, mood: mean(arr) }))
+    const energyBest =
+      (["high", "mid", "low"] as const)
+        .map((k) => ({ key: k, n: energyMeans[k].length, score: mean(energyMeans[k]) }))
         .filter((x) => x.n >= 3)
-        .sort((a, b) => b.mood - a.mood)[0] || null;
+        .sort((a, b) => b.score - a.score)[0] || null;
 
-    // --- Best time of day (mean tonnage_z; n>=3)
-    const byBucket = new Map<string, number[]>();
-    rows.forEach((r) => {
-      if (!r.started_at) return;
-      const b = bucketHour(r.started_at);
-      if (!byBucket.has(b)) byBucket.set(b, []);
-      if (Number.isFinite(r.tonnage_z as any)) byBucket.get(b)!.push(Number(r.tonnage_z));
-    });
-    const bestBucket =
-      [...byBucket.entries()]
-        .map(([bucket, arr]) => ({ bucket, n: arr.length, perf: mean(arr) }))
-        .filter((x) => x.n >= 3)
-        .sort((a, b) => b.perf - a.perf)[0] || null;
+    const recipeSource =
+      boosters_genres[0] ??
+      boosters_artists[0] ??
+      (byGenre[0] || byArtist[0]) /* fallback even if small n, front-end will gate */;
 
-    // --- Genre & artist leaderboards
-    const byGenrePerf = new Map<string, { perf: number[]; mood: number[] }>();
-    rows.forEach((r) => {
-      const g = (r.pre_top_genre || "").trim();
-      if (!g) return;
-      if (!byGenrePerf.has(g)) byGenrePerf.set(g, { perf: [], mood: [] });
-      if (Number.isFinite(r.tonnage_z as any)) byGenrePerf.get(g)!.perf.push(Number(r.tonnage_z));
-      if (Number.isFinite(r.mood_delta as any)) byGenrePerf.get(g)!.mood.push(Number(r.mood_delta));
-    });
-    const top_genres = [...byGenrePerf.entries()]
-      .map(([genre, { perf, mood }]) => ({
-        genre,
-        perf: +(mean(perf) || 0).toFixed(2),
-        mood: +(mean(mood) || 0).toFixed(2),
-        n: Math.max(perf.length, mood.length),
-      }))
-      .sort((a, b) => b.n - a.n)
-      .slice(0, 20);
+    const recipe = recipeSource
+      ? {
+          label: recipeSource.label,
+          type: boosters_genres.includes(recipeSource as any) || byGenre.includes(recipeSource as any) ? "genre" : "artist",
+          energy: (energyBest?.key as "low" | "mid" | "high" | undefined) ?? null,
+          bpm: energyToBpmRange((energyBest?.key as any) ?? null),
+          impact: recipeSource.impact,
+          n: recipeSource.n,
+        }
+      : null;
 
-    const byArtistPerf = new Map<string, { perf: number[]; mood: number[] }>();
-    rows.forEach((r) => {
-      const a = (r.pre_top_artist || "").trim();
-      if (!a) return;
-      if (!byArtistPerf.has(a)) byArtistPerf.set(a, { perf: [], mood: [] });
-      if (Number.isFinite(r.tonnage_z as any)) byArtistPerf.get(a)!.perf.push(Number(r.tonnage_z));
-      if (Number.isFinite(r.mood_delta as any)) byArtistPerf.get(a)!.mood.push(Number(r.mood_delta));
-    });
-    const top_artists = [...byArtistPerf.entries()]
-      .map(([artist, { perf, mood }]) => ({
-        artist,
-        perf: +(mean(perf) || 0).toFixed(2),
-        mood: +(mean(mood) || 0).toFixed(2),
-        n: Math.max(perf.length, mood.length),
-      }))
-      .sort((a, b) => b.n - a.n)
-      .slice(0, 20);
+    // ---------- Friendly score ----------
+    const friendlyScore = clamp(+overallMean.toFixed(2), -1, 1); // keep it bounded for UX
+
+    // ---------- Recommendation helpers ----------
+    // Play URL: just provide a search link that works without extra scopes.
+    const searchTerms = [
+      ...(boosters_genres.slice(0, 2).map((x) => x.label) || []),
+      ...(boosters_artists.slice(0, 2).map((x) => x.label) || []),
+    ].join(" ");
+    const play_url = searchTerms
+      ? `https://open.spotify.com/search/${encodeURIComponent(searchTerms)}`
+      : null;
 
     return NextResponse.json({
-      filters: { days, split, genre, artist, sample },
-      cards: {
-        music_to_performance: {
-          headline: perfHeadline,
-          uplift: perfUplift == null ? null : +perfUplift.toFixed(2),
-          n: Math.min(highs.length, lows.length),
-          confidence: perfConf,
+      filters: { days, split, genre, artist, sample: rows.length },
+      headline: {
+        score: friendlyScore,
+        best_time: bestTime ? { window: bestTime.window, n: bestTime.n } : null,
+        recipe: recipe,
+        // short copy helpers the UI can render:
+        copy: {
+          line:
+            recipe && bestTime
+              ? `You train best with ${recipe.label}${recipe.energy ? ` (${recipe.energy})` : ""} around ${bestTime.window}.`
+              : recipe
+              ? `Your best bet right now is ${recipe.label}${recipe.energy ? ` (${recipe.energy})` : ""}.`
+              : bestTime
+              ? `Your most consistent time is ${bestTime.window}.`
+              : null,
         },
-        music_to_mood: {
-          headline: moodHeadline,
-          uplift: moodUplift == null ? null : +moodUplift.toFixed(2),
-          n: Math.min(moodHighs.length, moodLows.length),
-          confidence: moodConf,
-        },
-        top_artist_performance: topArtist
-          ? { artist: topArtist.artist, uplift: +topArtist.perf.toFixed(2), n: topArtist.n }
-          : null,
-        top_genre_mood: topGenreMood
-          ? { genre: topGenreMood.genre, uplift: +topGenreMood.mood.toFixed(2), n: topGenreMood.n }
-          : null,
-        best_time_of_day: bestBucket
-          ? { bucket: bestBucket.bucket, uplift: +bestBucket.perf.toFixed(2), n: bestBucket.n }
-          : null,
-        top_genres,
-        top_artists,
+      },
+      boosters: { genres: boosters_genres, artists: boosters_artists },
+      drainers: { genres: drainers_genres, artists: drainers_artists },
+      recommendations: {
+        play_url,
+        notes: "Likely (n≥10), Tentative (n 5–9), Anecdotal (n<5)",
       },
     });
   } catch (e: any) {

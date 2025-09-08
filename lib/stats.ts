@@ -4,8 +4,12 @@ export function mean(xs: number[]) {
   return arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : NaN;
 }
 
-export function diffInMeans(a: number[], b: number[]) {
-  return mean(a) - mean(b);
+export function sd(xs: number[]) {
+  const arr = xs.filter((n) => Number.isFinite(n));
+  if (arr.length < 2) return 0;
+  const m = mean(arr);
+  const v = mean(arr.map((x) => (x - m) ** 2));
+  return Math.sqrt(v);
 }
 
 /** Buckets a timestamp into coarse time-of-day groups. */
@@ -18,11 +22,4 @@ export function bucketHour(dateIso: string) {
   if (h < 17) return "13–16";
   if (h < 21) return "17–20";
   return "21–01";
-}
-
-/** Toy confidence heuristic using sample size (n) and absolute effect size. */
-export function confidence(n: number, effectAbs: number): "low" | "medium" | "high" {
-  if (n >= 25 && effectAbs >= 0.3) return "high";
-  if (n >= 10 && effectAbs >= 0.15) return "medium";
-  return "low";
-}
+} 
