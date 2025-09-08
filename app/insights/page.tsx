@@ -78,13 +78,13 @@ export default function InsightsPage() {
           </select>
           <select className="border rounded p-2" value={genre ?? ""} onChange={(e)=>{setGenre(e.target.value || null); setArtist(null); setMapMode("genre");}}>
             <option value="">All genres</option>
-            {summary?.cards.top_genres?.map((g)=>(
+            {summary?.cards?.top_genres?.map((g)=>(
               <option key={g.genre} value={g.genre}>{g.genre}</option>
             ))}
           </select>
           <select className="border rounded p-2" value={artist ?? ""} onChange={(e)=>setArtist(e.target.value || null)}>
             <option value="">All artists</option>
-            {summary?.cards.top_artists?.map((a)=>(
+            {summary?.cards?.top_artists?.map((a)=>(
               <option key={a.artist} value={a.artist}>{a.artist}</option>
             ))}
           </select>
@@ -95,33 +95,33 @@ export default function InsightsPage() {
       <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <Tile
           title="Music & Workouts"
-          subtitle={summary?.cards.music_to_performance.headline || ""}
-          value={fmtDelta(summary?.cards.music_to_performance.uplift)}
-          tag={confBadge(summary?.cards.music_to_performance.confidence)}
+          subtitle={summary?.cards?.music_to_performance?.headline || ""}
+          value={fmtDelta(summary?.cards?.music_to_performance?.uplift)}
+          tag={confBadge(summary?.cards?.music_to_performance?.confidence)}
         />
         <Tile
           title="Music & Mood"
-          subtitle={summary?.cards.music_to_mood.headline || ""}
-          value={fmtDelta(summary?.cards.music_to_mood.uplift)}
-          tag={confBadge(summary?.cards.music_to_mood.confidence)}
+          subtitle={summary?.cards?.music_to_mood?.headline || ""}
+          value={fmtDelta(summary?.cards?.music_to_mood?.uplift)}
+          tag={confBadge(summary?.cards?.music_to_mood?.confidence)}
         />
         <Tile
           title="Top artist for workouts"
-          value={summary?.cards.top_artist_performance?.artist || "—"}
-          subtitle={summary?.cards.top_artist_performance ? `impact ${fmtDelta(summary.cards.top_artist_performance.uplift)} · sessions ${summary.cards.top_artist_performance.n}` : ""}
+          value={summary?.cards?.top_artist_performance?.artist || "—"}
+            subtitle={summary?.cards?.top_artist_performance ? `impact ${fmtDelta(summary?.cards?.top_artist_performance?.uplift)} · sessions ${summary?.cards?.top_artist_performance?.n}` : ""}
         />
         <Tile
           title="Top genre for mood"
-          value={summary?.cards.top_genre_mood?.genre || "—"}
-          subtitle={summary?.cards.top_genre_mood ? `lift ${fmtDelta(summary.cards.top_genre_mood.uplift)} · sessions ${summary.cards.top_genre_mood.n}` : ""}
+          value={summary?.cards?.top_genre_mood?.genre || "—"}
+            subtitle={summary?.cards?.top_genre_mood ? `lift ${fmtDelta(summary?.cards?.top_genre_mood?.uplift)} · sessions ${summary?.cards?.top_genre_mood?.n}` : ""}
         />
       </div>
-      {summary?.cards.best_time_of_day && (
+      {summary?.cards?.best_time_of_day && (
         <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <Tile
             title="Best time"
-            value={summary.cards.best_time_of_day ? `${summary.cards.best_time_of_day.bucket}` : "—"}
-            subtitle={summary.cards.best_time_of_day ? `sessions ${summary.cards.best_time_of_day.n} · impact ${fmtDelta(summary.cards.best_time_of_day.uplift)}` : ""}
+            value={summary?.cards?.best_time_of_day ? `${summary?.cards?.best_time_of_day?.bucket}` : "—"}
+            subtitle={summary?.cards?.best_time_of_day ? `sessions ${summary?.cards?.best_time_of_day?.n} · impact ${fmtDelta(summary?.cards?.best_time_of_day?.uplift)}` : ""}
           />
         </div>
       )}
@@ -129,7 +129,7 @@ export default function InsightsPage() {
       {/* Genre chips */}
       <Card title="Genre breakdown">
         <div className="flex flex-wrap gap-2">
-          {summary?.cards.top_genres?.map((g) => (
+          {summary?.cards?.top_genres?.map((g) => (
             <div
               key={g.genre}
               className="px-3 py-2 rounded-full border text-sm cursor-pointer"
@@ -149,7 +149,7 @@ export default function InsightsPage() {
       {/* Artist chips */}
       <Card title="Artist breakdown">
         <div className="flex flex-wrap gap-2">
-          {summary?.cards.top_artists?.map((a) => (
+          {summary?.cards?.top_artists?.map((a) => (
             <div key={a.artist} className="px-3 py-2 rounded-full border text-sm">
               <span className="font-medium">{a.artist}</span>{" "}
               <span className="text-gray-500">workout {fmtDelta(a.perf)}, mood {fmtDelta(a.mood)} · {a.n} sessions</span>
@@ -243,11 +243,11 @@ export default function InsightsPage() {
       {/* Actionable insights */}
       <Card title="Takeaways">
         <ul className="list-disc list-inside text-sm space-y-1">
-          {summary?.cards.top_artist_performance && (
-            <li>Songs from {summary.cards.top_artist_performance.artist} have lined up with stronger workouts.</li>
+          {summary?.cards?.top_artist_performance && (
+            <li>Songs from {summary?.cards?.top_artist_performance?.artist} have lined up with stronger workouts.</li>
           )}
-          {summary?.cards.top_genre_mood && (
-            <li>{summary.cards.top_genre_mood.genre} tracks often pair with brighter moods.</li>
+          {summary?.cards?.top_genre_mood && (
+            <li>{summary?.cards?.top_genre_mood?.genre} tracks often pair with brighter moods.</li>
           )}
         </ul>
       </Card>
