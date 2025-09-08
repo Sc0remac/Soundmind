@@ -1,9 +1,6 @@
 {
-  "/page": "app/page.js",
-  "/music/page": "app/music/page.js",
-  "/api/music/list/route": "app/api/music/list/route.js",
   "/insights/page": "app/insights/page.js",
   "/api/insights/summary/route": "app/api/insights/summary/route.js",
-  "/api/insights/timeline/route": "app/api/insights/timeline/route.js",
-  "/api/insights/soundmap/route": "app/api/insights/soundmap/route.js"
+  "/api/insights/soundmap/route": "app/api/insights/soundmap/route.js",
+  "/api/insights/timeline/route": "app/api/insights/timeline/route.js"
 }
