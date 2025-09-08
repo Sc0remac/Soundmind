@@ -53,9 +53,9 @@ export default function InsightsPage() {
         fetch(`/api/insights/timeline?${filtersQS}`, { headers }).then((r) => r.json()),
       ]);
 
-      setSummary(s);
-      setMap(m?.cells || []);
-      setTimeline(t?.items || []);
+      setSummary(s?.error ? null : s);
+      setMap(m?.error ? [] : m?.cells || []);
+      setTimeline(t?.error ? [] : t?.items || []);
       setLoading(false);
     })();
   }, [filtersQS, mapMode]);

@@ -1,8 +1,8 @@
 
  // app/api/insights/summary/route.ts
- import { NextResponse } from "next/server";
- import { supabaseAdmin } from "@/lib/supabaseAdmin";
- import { requireUserFromRequest } from "@/lib/auth";
+import { NextResponse } from "next/server";
+import { supabaseFromRequest } from "@/lib/auth";
+import { supabaseAdmin, usingServiceRole } from "@/lib/supabaseAdmin";
 import { diffInMeans, mean, confidence, bucketHour } from "@/lib/stats";
  
  type Row = {
@@ -21,9 +21,11 @@ import { diffInMeans, mean, confidence, bucketHour } from "@/lib/stats";
  
  export async function GET(req: Request) {
    try {
-     const user = await requireUserFromRequest(req);
-     const userId = user.id;
- 
+     const { supa } = supabaseFromRequest(req);
+     const { data: userData, error: userErr } = await supa.auth.getUser();
+     if (userErr || !userData?.user) throw new Error(userErr?.message || "Unauthorized");
+     const userId = userData.user.id;
+
      const { searchParams } = new URL(req.url);
      const days = Number(searchParams.get("days") || "30");
      const split = searchParams.get("split"); // optional
@@ -32,7 +34,9 @@ import { diffInMeans, mean, confidence, bucketHour } from "@/lib/stats";
  
      const since = new Date(Date.now() - days * 86400_000).toISOString();
  
-     const { data, error } = await supabaseAdmin
+     const client = usingServiceRole ? supabaseAdmin : supa;
+
+     const { data, error } = await client
        .from("v_correlations_ready")
        .select(
         "workout_id, started_at, split_name, tonnage_z, pre_energy, pre_valence, pre_top_genre, pre_top_artist, mood_delta"
