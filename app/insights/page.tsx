@@ -3,11 +3,12 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 
+/* -------------------- Types -------------------- */
 type SummaryRes = {
   filters: { days: number; split: string | null; genre: string | null; artist: string | null; sample: number };
   cards: {
-    music_to_performance: { headline: string; uplift: number | null; n: number; confidence: "low"|"medium"|"high" };
-    music_to_mood: { headline: string; uplift: number | null; n: number; confidence: "low"|"medium"|"high" };
+    music_to_performance: { headline: string; uplift: number | null; n: number; confidence: "low" | "medium" | "high" };
+    music_to_mood: { headline: string; uplift: number | null; n: number; confidence: "low" | "medium" | "high" };
     top_artist_performance: { artist: string; uplift: number; n: number } | null;
     top_genre_mood: { genre: string; uplift: number; n: number } | null;
     best_time_of_day: { bucket: string; uplift: number; n: number } | null;
@@ -18,6 +19,53 @@ type SummaryRes = {
 
 type SoundCell = { label: string; energy: "low" | "mid" | "high"; count: number; perf: number; mood: number };
 
+type ApiTimelineSession = {
+  workout_id: string;
+  started_at: string;
+  split_name: string | null;
+  tonnage: number | null;
+  sets_count: number | null;
+  tonnage_z: number | null;
+  pre_top_genre: string | null;
+  pre_top_artist: string | null;
+  mood_delta: number | null;
+};
+type ApiTimelineItem = { date: string; sessions: ApiTimelineSession[] };
+
+type UiSession = {
+  id: string;
+  split: string | null;
+  time: string; // ISO
+  tonnage: number | null;
+  sets: number | null;
+  pre: { artist: string | null; genre: string | null };
+  z: number | null;
+  mood_delta: number | null;
+};
+type UiTimelineItem = { date: string; sessions: UiSession[] };
+
+/* Transform API → UI shape so the renderer never crashes on undefined */
+function toUiTimeline(items: ApiTimelineItem[] | undefined | null): UiTimelineItem[] {
+  if (!items || !Array.isArray(items)) return [];
+  return items.map((d) => ({
+    date: d.date,
+    sessions: (d.sessions || []).map((s) => ({
+      id: s.workout_id,
+      split: s.split_name ?? null,
+      time: s.started_at,
+      tonnage: typeof s.tonnage === "number" ? s.tonnage : null,
+      sets: typeof s.sets_count === "number" ? s.sets_count : null,
+      pre: {
+        artist: s.pre_top_artist ?? null,
+        genre: s.pre_top_genre ?? null,
+      },
+      z: typeof s.tonnage_z === "number" ? s.tonnage_z : null,
+      mood_delta: typeof s.mood_delta === "number" ? s.mood_delta : null,
+    })),
+  }));
+}
+
+/* -------------------- Component -------------------- */
 export default function InsightsPage() {
   const [days, setDays] = useState(30);
   const [split, setSplit] = useState<string | null>(null);
@@ -27,7 +75,7 @@ export default function InsightsPage() {
 
   const [summary, setSummary] = useState<SummaryRes | null>(null);
   const [map, setMap] = useState<SoundCell[] | null>(null);
-  const [timeline, setTimeline] = useState<any[] | null>(null);
+  const [timeline, setTimeline] = useState<UiTimelineItem[] | null>(null);
   const [loading, setLoading] = useState(false);
   const energyLevels = ["low", "mid", "high"] as const;
 
@@ -53,9 +101,9 @@ export default function InsightsPage() {
         fetch(`/api/insights/timeline?${filtersQS}`, { headers }).then((r) => r.json()),
       ]);
 
-      setSummary(s?.error ? null : s);
-      setMap(m?.error ? [] : m?.cells || []);
-      setTimeline(t?.error ? [] : t?.items || []);
+      setSummary(s?.error ? null : (s as SummaryRes));
+      setMap(m?.error ? [] : (m?.cells as SoundCell[]) || []);
+      setTimeline(t?.error ? [] : toUiTimeline(t?.items as ApiTimelineItem[]));
       setLoading(false);
     })();
   }, [filtersQS, mapMode]);
@@ -65,27 +113,48 @@ export default function InsightsPage() {
       <div className="flex items-center gap-3 flex-wrap">
         <h1 className="text-2xl font-semibold">Insights</h1>
         <div className="ml-auto flex items-center gap-2 flex-wrap">
-          <select className="border rounded p-2" value={days} onChange={(e)=>setDays(Number(e.target.value))}>
+          <select className="border rounded p-2" value={days} onChange={(e) => setDays(Number(e.target.value))}>
             <option value={7}>Last 7 days</option>
             <option value={30}>Last 30 days</option>
             <option value={90}>Last 90 days</option>
           </select>
-          <select className="border rounded p-2" value={split ?? ""} onChange={(e)=>setSplit(e.target.value || null)}>
+          <select className="border rounded p-2" value={split ?? ""} onChange={(e) => setSplit(e.target.value || null)}>
             <option value="">All splits</option>
-            <option>Push</option><option>Pull</option><option>Legs</option>
-            <option>Upper</option><option>Lower</option><option>Arms</option><option>Back</option>
+            <option>Push</option>
+            <option>Pull</option>
+            <option>Legs</option>
+            <option>Upper</option>
+            <option>Lower</option>
+            <option>Arms</option>
+            <option>Back</option>
             <option>Full Body</option>
           </select>
-          <select className="border rounded p-2" value={genre ?? ""} onChange={(e)=>{setGenre(e.target.value || null); setArtist(null); setMapMode("genre");}}>
+          <select
+            className="border rounded p-2"
+            value={genre ?? ""}
+            onChange={(e) => {
+              setGenre(e.target.value || null);
+              setArtist(null);
+              setMapMode("genre");
+            }}
+          >
             <option value="">All genres</option>
-            {summary?.cards?.top_genres?.map((g)=>(
-              <option key={g.genre} value={g.genre}>{g.genre}</option>
+            {summary?.cards?.top_genres?.map((g) => (
+              <option key={g.genre} value={g.genre}>
+                {g.genre}
+              </option>
             ))}
           </select>
-          <select className="border rounded p-2" value={artist ?? ""} onChange={(e)=>setArtist(e.target.value || null)}>
+          <select
+            className="border rounded p-2"
+            value={artist ?? ""}
+            onChange={(e) => setArtist(e.target.value || null)}
+          >
             <option value="">All artists</option>
-            {summary?.cards?.top_artists?.map((a)=>(
-              <option key={a.artist} value={a.artist}>{a.artist}</option>
+            {summary?.cards?.top_artists?.map((a) => (
+              <option key={a.artist} value={a.artist}>
+                {a.artist}
+              </option>
             ))}
           </select>
         </div>
@@ -108,20 +177,32 @@ export default function InsightsPage() {
         <Tile
           title="Top artist for workouts"
           value={summary?.cards?.top_artist_performance?.artist || "—"}
-            subtitle={summary?.cards?.top_artist_performance ? `impact ${fmtDelta(summary?.cards?.top_artist_performance?.uplift)} · sessions ${summary?.cards?.top_artist_performance?.n}` : ""}
+          subtitle={
+            summary?.cards?.top_artist_performance
+              ? `impact ${fmtDelta(summary?.cards?.top_artist_performance?.uplift)} · sessions ${summary?.cards?.top_artist_performance?.n}`
+              : ""
+          }
         />
         <Tile
           title="Top genre for mood"
           value={summary?.cards?.top_genre_mood?.genre || "—"}
-            subtitle={summary?.cards?.top_genre_mood ? `lift ${fmtDelta(summary?.cards?.top_genre_mood?.uplift)} · sessions ${summary?.cards?.top_genre_mood?.n}` : ""}
+          subtitle={
+            summary?.cards?.top_genre_mood
+              ? `lift ${fmtDelta(summary?.cards?.top_genre_mood?.uplift)} · sessions ${summary?.cards?.top_genre_mood?.n}`
+              : ""
+          }
         />
       </div>
       {summary?.cards?.best_time_of_day && (
         <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <Tile
             title="Best time"
-            value={summary?.cards?.best_time_of_day ? `${summary?.cards?.best_time_of_day?.bucket}` : "—"}
-            subtitle={summary?.cards?.best_time_of_day ? `sessions ${summary?.cards?.best_time_of_day?.n} · impact ${fmtDelta(summary?.cards?.best_time_of_day?.uplift)}` : ""}
+            value={summary?.cards?.best_time_of_day?.bucket || "—"}
+            subtitle={
+              summary?.cards?.best_time_of_day
+                ? `sessions ${summary?.cards?.best_time_of_day?.n} · impact ${fmtDelta(summary?.cards?.best_time_of_day?.uplift)}`
+                : ""
+            }
           />
         </div>
       )}
@@ -129,47 +210,53 @@ export default function InsightsPage() {
       {/* Genre chips */}
       <Card title="Genre breakdown">
         <div className="flex flex-wrap gap-2">
-          {summary?.cards?.top_genres?.map((g) => (
-            <div
-              key={g.genre}
-              className="px-3 py-2 rounded-full border text-sm cursor-pointer"
-              onClick={() => {
-                setGenre(g.genre);
-                setMapMode("artist");
-                setArtist(null);
-              }}
-            >
-              <span className="font-medium">{g.genre}</span>{" "}
-              <span className="text-gray-500">workout {fmtDelta(g.perf)}, mood {fmtDelta(g.mood)} · {g.n} sessions</span>
-            </div>
-          )) || <div className="text-sm text-gray-500">Not enough data yet.</div>}
+          {summary?.cards?.top_genres?.length ? (
+            summary.cards.top_genres.map((g) => (
+              <div
+                key={g.genre}
+                className="px-3 py-2 rounded-full border text-sm cursor-pointer"
+                onClick={() => {
+                  setGenre(g.genre);
+                  setMapMode("artist");
+                  setArtist(null);
+                }}
+              >
+                <span className="font-medium">{g.genre}</span>{" "}
+                <span className="text-gray-500">
+                  workout {fmtDelta(g.perf)}, mood {fmtDelta(g.mood)} · {g.n} sessions
+                </span>
+              </div>
+            ))
+          ) : (
+            <div className="text-sm text-gray-500">Not enough data yet.</div>
+          )}
         </div>
       </Card>
 
       {/* Artist chips */}
       <Card title="Artist breakdown">
         <div className="flex flex-wrap gap-2">
-          {summary?.cards?.top_artists?.map((a) => (
-            <div key={a.artist} className="px-3 py-2 rounded-full border text-sm">
-              <span className="font-medium">{a.artist}</span>{" "}
-              <span className="text-gray-500">workout {fmtDelta(a.perf)}, mood {fmtDelta(a.mood)} · {a.n} sessions</span>
-            </div>
-          )) || <div className="text-sm text-gray-500">Not enough data yet.</div>}
+          {summary?.cards?.top_artists?.length ? (
+            summary.cards.top_artists.map((a) => (
+              <div key={a.artist} className="px-3 py-2 rounded-full border text-sm">
+                <span className="font-medium">{a.artist}</span>{" "}
+                <span className="text-gray-500">
+                  workout {fmtDelta(a.perf)}, mood {fmtDelta(a.mood)} · {a.n} sessions
+                </span>
+              </div>
+            ))
+          ) : (
+            <div className="text-sm text-gray-500">Not enough data yet.</div>
+          )}
         </div>
       </Card>
 
       {/* Sound & sweat map */}
-      <Card
-        title="Your sound & sweat map"
-        subtitle={`${mapMode === "genre" ? "Genre" : "Artist"} × Energy → average workout/mood`}
-      >
+      <Card title="Your sound & sweat map" subtitle={`${mapMode === "genre" ? "Genre" : "Artist"} × Energy → average workout/mood`}>
         {(() => {
           const labels = Array.from(new Set(map?.map((c) => c.label) || []));
           return (
-            <div
-              className="grid gap-2"
-              style={{ gridTemplateColumns: `repeat(${energyLevels.length + 1}, minmax(0,1fr))` }}
-            >
+            <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${energyLevels.length + 1}, minmax(0,1fr))` }}>
               <CellHeader />
               {energyLevels.map((e) => (
                 <div key={e} className="text-xs text-gray-500 text-center">
@@ -215,41 +302,39 @@ export default function InsightsPage() {
       {/* Timeline digest */}
       <Card title="Recent sessions (digest)">
         <div className="space-y-4">
-          {timeline?.map((d)=>(
-            <div key={d.date} className="rounded border p-3">
-              <div className="text-sm font-medium mb-2">{fmtDate(d.date)}</div>
-              <div className="space-y-2">
-                {d.sessions.map((s:any)=>(
-                  <div key={s.id} className="flex items-center gap-3 text-sm">
-                    <span className="px-2 py-1 rounded bg-gray-100">{s.split || "—"}</span>
-                    <span>{fmtTime(s.time)}</span>
-                    <span>effort {Math.round(s.tonnage || 0)}</span>
-                    <span className="text-gray-500">sets {s.sets}</span>
-                    <span className="text-gray-700">
-                      before: {s.pre.artist ? `${s.pre.artist}${s.pre.genre ? ` · ${s.pre.genre}` : ""}` : s.pre.genre || ""}
-                    </span>
-                    <span className={`${s.z>0?'text-green-700':s.z<0?'text-red-700':'text-gray-600'}`}>workout {fmtDelta(s.z)}</span>
-                    <span className={`ml-auto ${s.mood_delta>0?'text-green-700':s.mood_delta<0?'text-red-700':'text-gray-600'}`}> 
-                      mood {fmtDelta(s.mood_delta)}
-                    </span>
-                  </div>
-                ))}
+          {timeline?.length ? (
+            timeline.map((d) => (
+              <div key={d.date} className="rounded border p-3">
+                <div className="text-sm font-medium mb-2">{fmtDate(d.date)}</div>
+                <div className="space-y-2">
+                  {d.sessions.map((s) => (
+                    <div key={s.id} className="flex items-center gap-3 text-sm">
+                      <span className="px-2 py-1 rounded bg-gray-100">{s.split || "—"}</span>
+                      <span>{fmtTime(s.time)}</span>
+                      <span>effort {Math.round(s.tonnage || 0)}</span>
+                      <span className="text-gray-500">sets {s.sets ?? 0}</span>
+                      <span className="text-gray-700">
+                        before: {s.pre?.artist ? `${s.pre.artist}${s.pre?.genre ? ` · ${s.pre.genre}` : ""}` : s.pre?.genre || "—"}
+                      </span>
+                      <span className={`${(s.z ?? 0) > 0 ? "text-green-700" : (s.z ?? 0) < 0 ? "text-red-700" : "text-gray-600"}`}>
+                        workout {fmtDelta(s.z)}
+                      </span>
+                      <span
+                        className={`ml-auto ${
+                          (s.mood_delta ?? 0) > 0 ? "text-green-700" : (s.mood_delta ?? 0) < 0 ? "text-red-700" : "text-gray-600"
+                        }`}
+                      >
+                        mood {fmtDelta(s.mood_delta)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
               </div>
-            </div>
-          )) || <div className="text-sm text-gray-500">No sessions in range.</div>}
+            ))
+          ) : (
+            <div className="text-sm text-gray-500">No sessions in range.</div>
+          )}
         </div>
-      </Card>
-
-      {/* Actionable insights */}
-      <Card title="Takeaways">
-        <ul className="list-disc list-inside text-sm space-y-1">
-          {summary?.cards?.top_artist_performance && (
-            <li>Songs from {summary?.cards?.top_artist_performance?.artist} have lined up with stronger workouts.</li>
-          )}
-          {summary?.cards?.top_genre_mood && (
-            <li>{summary?.cards?.top_genre_mood?.genre} tracks often pair with brighter moods.</li>
-          )}
-        </ul>
       </Card>
 
       {loading && <div className="text-sm text-gray-500">Updating…</div>}
@@ -258,7 +343,17 @@ export default function InsightsPage() {
 }
 
 /* ---------- tiny UI helpers ---------- */
-function Tile({ title, subtitle, value, tag }: { title: string; subtitle?: string; value: string; tag?: React.ReactNode }) {
+function Tile({
+  title,
+  subtitle,
+  value,
+  tag,
+}: {
+  title: string;
+  subtitle?: string;
+  value: string;
+  tag?: React.ReactNode;
+}) {
   return (
     <div className="rounded-xl border p-4 bg-white">
       <div className="flex items-start justify-between mb-2">
@@ -270,7 +365,7 @@ function Tile({ title, subtitle, value, tag }: { title: string; subtitle?: strin
     </div>
   );
 }
-function Card({ title, subtitle, children }:{title:string; subtitle?:string; children:any}) {
+function Card({ title, subtitle, children }: { title: string; subtitle?: string; children: any }) {
   return (
     <section className="rounded-xl border bg-white p-4">
       <div className="mb-3">
@@ -281,14 +376,19 @@ function Card({ title, subtitle, children }:{title:string; subtitle?:string; chi
     </section>
   );
 }
-function confBadge(level?: "low"|"medium"|"high") {
-  const c = level==="high"?"bg-green-100 text-green-800":level==="medium"?"bg-amber-100 text-amber-800":"bg-gray-100 text-gray-800";
-  return <span className={`text-xs px-2 py-1 rounded ${c}`}>{level||"—"}</span>;
+function confBadge(level?: "low" | "medium" | "high") {
+  const c =
+    level === "high"
+      ? "bg-green-100 text-green-800"
+      : level === "medium"
+      ? "bg-amber-100 text-amber-800"
+      : "bg-gray-100 text-gray-800";
+  return <span className={`text-xs px-2 py-1 rounded ${c}`}>{level || "—"}</span>;
 }
-function fmtDelta(x?: number|null) {
-  if (x==null || isNaN(x)) return "—";
-  const sign = x>0?"+":"";
-  return `${sign}${x.toFixed(2)}`;
+function fmtDelta(x?: number | null) {
+  if (x == null || isNaN(x as any)) return "—";
+  const sign = (x as number) > 0 ? "+" : "";
+  return `${sign}${(x as number).toFixed(2)}`;
 }
 function fmtDate(iso: string) {
   const d = new Date(iso);
@@ -298,16 +398,20 @@ function fmtTime(iso: string) {
   const d = new Date(iso);
   return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
-function CellHeader(){ return <div/> }
-function HeatCell({ cell }:{ cell?: SoundCell }) {
+function CellHeader() {
+  return <div />;
+}
+function HeatCell({ cell }: { cell?: SoundCell }) {
   if (!cell) return <div className="h-14 rounded border bg-gray-50" />;
   const hue = cell.perf >= 0 ? 150 : 0; // green vs red
-  const intensity = Math.min(1, Math.abs(cell.perf)/1.0); // clamp around 1 SD
-  const bg = `hsl(${hue} 80% ${92 - 30*intensity}%)`;
+  const intensity = Math.min(1, Math.abs(cell.perf) / 1.0); // clamp around 1 SD
+  const bg = `hsl(${hue} 80% ${92 - 30 * intensity}%)`;
   return (
     <div className="h-14 rounded border flex flex-col items-center justify-center" style={{ background: bg }}>
       <div className="text-sm font-medium">{fmtDelta(cell.perf)}</div>
-      <div className="text-[11px] text-gray-600">{cell.count} sessions · mood {fmtDelta(cell.mood)}</div>
+      <div className="text-[11px] text-gray-600">
+        {cell.count} sessions · mood {fmtDelta(cell.mood)}
+      </div>
     </div>
   );
 }

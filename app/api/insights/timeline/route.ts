@@ -1,70 +1,50 @@
-
- // app/api/insights/timeline/route.ts
+// app/api/insights/timeline/route.ts
 import { NextResponse } from "next/server";
-import { supabaseFromRequest } from "@/lib/auth";
-import { supabaseAdmin, usingServiceRole } from "@/lib/supabaseAdmin";
+import { getUserAndClient, fetchJoinedRows } from "../_common";
 
- 
- export async function GET(req: Request) {
-   try {
-    const { supa } = supabaseFromRequest(req);
-    const { data: userData, error: userErr } = await supa.auth.getUser();
-    if (userErr || !userData?.user) throw new Error(userErr?.message || "Unauthorized");
-    const userId = userData.user.id;
+export async function GET(req: Request) {
+  try {
+    const { client, userId } = await getUserAndClient(req);
 
     const { searchParams } = new URL(req.url);
-     const days = Number(searchParams.get("days") || "30");
+    const days = Number(searchParams.get("days") || "30");
+    const split = searchParams.get("split");
     const genre = searchParams.get("genre");
     const artist = searchParams.get("artist");
-     const since = new Date(Date.now() - days * 86400_000).toISOString();
- 
-    const client = usingServiceRole ? supabaseAdmin : supa;
+    const sinceIso = new Date(Date.now() - days * 86400_000).toISOString();
 
-    const { data, error } = await client
-      .from("v_correlations_ready")
-       .select(
+    const rows = await fetchJoinedRows({ client, userId, sinceIso, split, genre, artist });
 
-        "workout_id, started_at, split_name, tonnage, sets_count, tonnage_z, pre_energy, pre_valence, pre_top_genre, pre_top_artist, mood_delta"
-       )
-       .eq("user_id", userId)
-       .gte("started_at", since)
-       .order("started_at", { ascending: false });
- 
-     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
- 
-     const daysMap = new Map<string, any[]>();
-     for (const r of data || []) {
-      if (genre && (r.pre_top_genre || "") !== genre) continue;
-      if (artist && (r.pre_top_artist || "") !== artist) continue;
-       const d = new Date(r.started_at);
-       const key = d.toISOString().slice(0, 10);
-       const arr = daysMap.get(key) || [];
-       arr.push({
-         id: r.workout_id,
-         time: r.started_at,
-         split: r.split_name,
-         tonnage: r.tonnage,
-         sets: r.sets_count,
-         z: r.tonnage_z,
-         pre: {
+    // Group by YYYY-MM-DD
+    const daysMap = new Map<string, any[]>();
+    for (const r of rows) {
+      const d = new Date(r.started_at);
+      const key = isNaN(d.getTime()) ? "Unknown" : d.toISOString().slice(0, 10);
+      const arr = daysMap.get(key) || [];
+      arr.push({
+        workout_id: r.workout_id,
+        started_at: r.started_at,
+        split_name: r.split_name,
+        tonnage: r.tonnage,
+        sets_count: r.sets_count,
+        tonnage_z: r.tonnage_z ?? null, // <-- include Z for UI color/impact display
+        pre_energy: r.pre_energy,
+        pre_valence: r.pre_valence,
+        pre_top_genre: r.pre_top_genre,
+        pre_top_artist: r.pre_top_artist,
+        mood_delta: r.mood_delta,
+      });
+      daysMap.set(key, arr);
+    }
 
-           energy: r.pre_energy,
-           valence: r.pre_valence,
-           genre: r.pre_top_genre,
-          artist: r.pre_top_artist,
-         },
-         mood_delta: r.mood_delta,
-       });
-       daysMap.set(key, arr);
-     }
- 
-     const items = [...daysMap.entries()].map(([date, sessions]) => ({
-       date,
-       sessions,
-     }));
- 
-     return NextResponse.json({ items });
-   } catch (e: any) {
-     return NextResponse.json({ error: e?.message || String(e) }, { status: 401 });
-   }
- }  
+    const items = [...daysMap.entries()]
+      .sort((a, b) => (a[0] < b[0] ? 1 : -1))
+      .map(([date, sessions]) => ({ date, sessions }));
+
+    return NextResponse.json({ items });
+  } catch (e: any) {
+    const status = e?.status || 500;
+    console.error("[/api/insights/timeline] error:", e);
+    return NextResponse.json({ error: e?.message || String(e) }, { status });
+  }
+}

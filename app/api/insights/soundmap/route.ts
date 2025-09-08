@@ -1,70 +1,56 @@
-
- // app/api/insights/soundmap/route.ts
+// app/api/insights/soundmap/route.ts
 import { NextResponse } from "next/server";
-import { supabaseFromRequest } from "@/lib/auth";
-import { supabaseAdmin, usingServiceRole } from "@/lib/supabaseAdmin";
+import { getUserAndClient, fetchJoinedRows, energyBucket } from "../_common";
 
- 
- export async function GET(req: Request) {
-   try {
-    const { supa } = supabaseFromRequest(req);
-    const { data: userData, error: userErr } = await supa.auth.getUser();
-    if (userErr || !userData?.user) throw new Error(userErr?.message || "Unauthorized");
-    const userId = userData.user.id;
+export async function GET(req: Request) {
+  try {
+    const { client, userId } = await getUserAndClient(req);
 
-   const { searchParams } = new URL(req.url);
-     const days = Number(searchParams.get("days") || "90");
-    const mode = searchParams.get("mode") === "artist" ? "artist" : "genre";
+    const { searchParams } = new URL(req.url);
+    const days = Number(searchParams.get("days") || "30");
+    const mode = (searchParams.get("mode") || "genre") === "artist" ? "artist" : "genre";
+    const split = searchParams.get("split");
     const genre = searchParams.get("genre");
     const artist = searchParams.get("artist");
-     const since = new Date(Date.now() - days * 86400_000).toISOString();
- 
-    const client = usingServiceRole ? supabaseAdmin : supa;
+    const sinceIso = new Date(Date.now() - days * 86400_000).toISOString();
 
-    const { data, error } = await client
-      .from("v_correlations_ready")
+    const rows = await fetchJoinedRows({ client, userId, sinceIso, split, genre, artist });
+    type Agg = { count: number; mean_perf: number; mean_mood: number };
+    const agg = new Map<string, Agg>(); // key = `${label}|${energy}`
 
-      .select("started_at, tonnage_z, mood_delta, pre_energy, pre_top_genre, pre_top_artist")
-       .eq("user_id", userId)
-       .gte("started_at", since);
- 
-     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
- 
-     type Cell = { count: number; mean_perf: number; mean_mood: number };
-     const grid = new Map<string, Cell>();
- 
-     const bandE = (e: number | null) =>
-       e == null ? null : e < 0.4 ? "low" : e < 0.7 ? "mid" : "high";
- 
-     for (const r of data || []) {
-      if (genre && (r.pre_top_genre || "") !== genre) continue;
-      if (artist && (r.pre_top_artist || "") !== artist) continue;
-      const label = mode === "artist" ? r.pre_top_artist : r.pre_top_genre;
-       const bandEn = bandE(r.pre_energy);
+    for (const r of rows) {
+      const label = (mode === "genre" ? r.pre_top_genre : r.pre_top_artist) || "(unknown)";
+      const e = energyBucket(r.pre_energy);
+      if (!label || !e) continue;
 
-      if (!label || !bandEn) continue;
-      const key = `${label}|${bandEn}`;
-       const cell = grid.get(key) || { count: 0, mean_perf: 0, mean_mood: 0 };
-       cell.count += 1;
-       cell.mean_perf += Number.isFinite(r.tonnage_z) ? (r.tonnage_z as number) : 0;
-       cell.mean_mood += Number.isFinite(r.mood_delta) ? (r.mood_delta as number) : 0;
-       grid.set(key, cell);
-     }
- 
-     const cells = [...grid.entries()].map(([k, v]) => {
+      const key = `${label}|${e}`;
+      const entry = agg.get(key) || { count: 0, mean_perf: 0, mean_mood: 0 };
+      const perf = Number.isFinite(r.tonnage_z as any) ? Number(r.tonnage_z) : 0;
+      const mood = Number.isFinite(r.mood_delta as any) ? Number(r.mood_delta) : 0;
+
+      // online means
+      const newCount = entry.count + 1;
+      entry.mean_perf = entry.mean_perf + (perf - entry.mean_perf) / newCount;
+      entry.mean_mood = entry.mean_mood + (mood - entry.mean_mood) / newCount;
+      entry.count = newCount;
+      agg.set(key, entry);
+    }
+
+    const cells = Array.from(agg.entries()).map(([k, v]) => {
       const [label, energy] = k.split("|");
-       return {
+      return {
         label,
-         energy,
-         count: v.count,
-         perf: +(v.mean_perf / v.count).toFixed(2),
-         mood: +(v.mean_mood / v.count).toFixed(2),
-       };
-     });
- 
+        energy,
+        count: v.count,
+        perf: +v.mean_perf.toFixed(2),
+        mood: +v.mean_mood.toFixed(2),
+      };
+    });
 
-   return NextResponse.json({ days, mode, cells });
-   } catch (e: any) {
-     return NextResponse.json({ error: e?.message || String(e) }, { status: 401 });
-   }
- }  
+    return NextResponse.json({ days, mode, cells });
+  } catch (e: any) {
+    const status = e?.status || 500;
+    console.error("[/api/insights/soundmap] error:", e);
+    return NextResponse.json({ error: e?.message || String(e) }, { status });
+  }
+}
