@@ -1,9 +1,13 @@
 // app/music/page.tsx
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
-import { supabase } from "@/lib/supabase";
+// Use the existing browser supabase client so the page can compile and
+// execute correctly. The previous import pointed to a non-existent module
+// (`@/lib/supabase`), causing Next.js to throw a "module not found" build
+// error when navigating to the music page.
+import { supabase } from "@/lib/supabaseClient";
 import {
   Card, CardHeader, CardBody, CardFooter,
   Button, Chip, Skeleton
@@ -55,72 +59,69 @@ export default function MusicPage() {
         if (active) setConnected(false);
       }
 
-      // 2) Recent listens (fallback-friendly)
-      try {
-        const { data, error } = await supabase
-          .from("spotify_listens")
-          .select("id, track_name, artist_name, album_name, played_at, genre")
-          .order("played_at", { ascending: false })
-          .limit(12);
-        if (!error && active) setRecent((data as Listen[]) ?? []);
-      } catch {
-        if (active) setRecent([]);
-      }
-
-      // 3) Top artists (try artists table, else aggregate listens)
-      try {
-        const { data: artists } = await supabase
-          .from("spotify_artists")
-          .select("id, name, play_count")
-          .order("play_count", { ascending: false })
-          .limit(10);
-        if (artists && artists.length) {
-          if (active) setTopArtists(artists as unknown as Artist[]);
-        } else {
-          // aggregate from listens as fallback
-          const map = new Map<string, number>();
-          recent.forEach(r => {
-            const key = r.artist_name ?? "";
-            if (!key) return;
-            map.set(key, (map.get(key) ?? 0) + 1);
-          });
-          const agg = [...map.entries()]
-            .map(([name, play_count], i) => ({ id: String(i), name, play_count }))
-            .sort((a, b) => (b.play_count ?? 0) - (a.play_count ?? 0))
-            .slice(0, 10);
-          if (active) setTopArtists(agg);
+        // 2) Recent listens (fallback-friendly)
+        let listens: Listen[] = [];
+        try {
+          const { data, error } = await supabase
+            .from("spotify_listens")
+            .select("id, track_name, artist_name, album_name, played_at, genre")
+            .order("played_at", { ascending: false })
+            .limit(12);
+          if (!error && data) listens = data as Listen[];
+          if (active) setRecent(listens);
+        } catch {
+          if (active) setRecent([]);
         }
-      } catch {
-        if (active) setTopArtists([]);
-      }
 
-      // 4) Top genres (aggregate locally)
-      try {
-        const map = new Map<string, number>();
-        recent.forEach(r => {
-          const g = (r.genre ?? "").trim();
-          if (!g) return;
-          map.set(g, (map.get(g) ?? 0) + 1);
-        });
-        const list = [...map.entries()]
-          .map(([genre, count]) => ({ genre, count }))
-          .sort((a, b) => b.count - a.count)
-          .slice(0, 8);
-        if (active) setTopGenres(list);
-      } catch {
-        if (active) setTopGenres([]);
-      }
+        // 3) Top artists (try artists table, else aggregate listens)
+        try {
+          const { data: artists } = await supabase
+            .from("spotify_artists")
+            .select("id, name, play_count")
+            .order("play_count", { ascending: false })
+            .limit(10);
+          if (artists && artists.length) {
+            if (active) setTopArtists(artists as unknown as Artist[]);
+          } else {
+            // aggregate from listens as fallback
+            const map = new Map<string, number>();
+            listens.forEach((r) => {
+              const key = r.artist_name ?? "";
+              if (!key) return;
+              map.set(key, (map.get(key) ?? 0) + 1);
+            });
+            const agg = [...map.entries()]
+              .map(([name, play_count], i) => ({ id: String(i), name, play_count }))
+              .sort((a, b) => (b.play_count ?? 0) - (a.play_count ?? 0))
+              .slice(0, 10);
+            if (active) setTopArtists(agg);
+          }
+        } catch {
+          if (active) setTopArtists([]);
+        }
+
+        // 4) Top genres (aggregate locally)
+        try {
+          const map = new Map<string, number>();
+          listens.forEach((r) => {
+            const g = (r.genre ?? "").trim();
+            if (!g) return;
+            map.set(g, (map.get(g) ?? 0) + 1);
+          });
+          const list = [...map.entries()]
+            .map(([genre, count]) => ({ genre, count }))
+            .sort((a, b) => b.count - a.count)
+            .slice(0, 8);
+          if (active) setTopGenres(list);
+        } catch {
+          if (active) setTopGenres([]);
+        }
 
       if (active) setLoading(false);
     })();
 
     return () => { active = false; };
   }, []); // run once
-
-  const hasData = useMemo(
-    () => (recent?.length ?? 0) > 0 || (topArtists?.length ?? 0) > 0 || (topGenres?.length ?? 0) > 0,
-    [recent, topArtists, topGenres]
-  );
 
   const connect = () => {
     // Kick off OAuth via your existing endpoint
