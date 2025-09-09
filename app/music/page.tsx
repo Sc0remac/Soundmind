@@ -136,13 +136,6 @@ export default function MusicPage() {
   const syncNow = async () => {
     setSyncing(true);
     try {
-<<<<<<< ours
-      const { data: { session } } = await supabase.auth.getSession();
-      const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined;
-      const res = await fetch("/api/spotify/my/sync", { method: "POST", headers });
-      if (!res.ok) throw new Error("Sync failed");
-      await fetch("/api/enrich/run", { method: "POST", headers });
-=======
       const {
         data: { session },
       } = await supabase.auth.getSession();
@@ -153,7 +146,6 @@ export default function MusicPage() {
       if (!res.ok) throw new Error("Sync failed");
       await fetch("/api/enrich/run", { method: "POST", headers });
       await loadAll();
->>>>>>> theirs
     } catch {
       // could toast an error
     } finally {
@@ -197,76 +189,49 @@ export default function MusicPage() {
               </div>
             </div>
           </div>
-          <div className="flex flex-wrap gap-2">
-            {!connected ? (
-              <Button color="success" startContent={<PlugZap className="size-4" />} onPress={connect}>
-                Connect Spotify
-              </Button>
-            ) : (
+          <div className="flex gap-2">
+            {connected ? (
               <>
                 <Button
                   variant="flat"
                   startContent={<RefreshCcw className="size-4" />}
-                  onPress={syncNow}
                   isLoading={syncing}
+                  onPress={syncNow}
                 >
                   Sync now
                 </Button>
-                <Button color="primary" startContent={<Play className="size-4" />} onPress={playBoosters}>
+                <Button
+                  variant="flat"
+                  startContent={<Play className="size-4" />}
+                  onPress={playBoosters}
+                >
                   Play boosters
                 </Button>
               </>
+            ) : (
+              <Button
+                variant="flat"
+                startContent={<PlugZap className="size-4" />}
+                onPress={connect}
+              >
+                Connect
+              </Button>
             )}
           </div>
         </CardHeader>
       </Card>
 
-      {/* Top genres */}
-      <Card className="border border-white/10 bg-white/5">
-        <CardHeader className="flex items-center gap-3">
-          <div className="rounded-xl bg-gradient-to-br from-indigo-400 to-violet-500 p-2 ring-1 ring-white/20">
-            <Radio className="size-5" />
-          </div>
-          <div>
-            <h2 className="text-lg font-semibold">Top genres</h2>
-            <p className="text-xs text-white/60">Based on your recent listening</p>
-          </div>
-        </CardHeader>
-        <CardBody>
-          {loading ? (
-            <div className="flex flex-wrap gap-2">
-              {Array.from({ length: 6 }).map((_, i) => (
-                <Skeleton key={i} className="h-7 w-28 rounded-xl" />
-              ))}
-            </div>
-          ) : topGenres.length ? (
-            <div className="flex flex-wrap gap-2">
-              {topGenres.map((g) => (
-                <Chip key={g.genre} variant="flat" className="bg-indigo-500/20">
-                  {g.genre} · {g.count}
-                </Chip>
-              ))}
-            </div>
-          ) : (
-            <div className="text-sm text-white/70">Not enough data yet. Try syncing or listening a bit more.</div>
-          )}
-        </CardBody>
-      </Card>
-
       {/* Top artists */}
       <Card className="border border-white/10 bg-white/5">
         <CardHeader className="flex items-center gap-3">
-          <div className="rounded-xl bg-gradient-to-br from-fuchsia-400 to-pink-500 p-2 ring-1 ring-white/20">
+          <div className="rounded-xl bg-gradient-to-br from-pink-400 to-fuchsia-500 p-2 ring-1 ring-white/20">
             <Disc3 className="size-5" />
           </div>
-          <div>
-            <h2 className="text-lg font-semibold">Top artists</h2>
-            <p className="text-xs text-white/60">Your most played</p>
-          </div>
+          <h2 className="text-lg font-semibold">Top artists</h2>
         </CardHeader>
-        <CardBody className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        <CardBody className="space-y-2">
           {loading ? (
-            Array.from({ length: 6 }).map((_, i) => (
+            Array.from({ length: 5 }).map((_, i) => (
               <Skeleton key={i} className="h-10 rounded-xl" />
             ))
           ) : topArtists.length ? (
@@ -364,4 +329,3 @@ export default function MusicPage() {
     </main>
   );
 }
-
