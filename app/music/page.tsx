@@ -131,9 +131,11 @@ export default function MusicPage() {
   const syncNow = async () => {
     setSyncing(true);
     try {
-      // Your GET returned 405 earlier; use POST.
-      const res = await fetch("/api/spotify/my/sync", { method: "POST" });
+      const { data: { session } } = await supabase.auth.getSession();
+      const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined;
+      const res = await fetch("/api/spotify/my/sync", { method: "POST", headers });
       if (!res.ok) throw new Error("Sync failed");
+      await fetch("/api/enrich/run", { method: "POST", headers });
     } catch {
       // noop – could toast error here
     } finally {
