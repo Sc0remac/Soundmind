@@ -3,6 +3,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { supabase } from "@/lib/supabaseClient";
 import {
   Card,
@@ -12,11 +13,11 @@ import {
   Button,
   Chip,
   Skeleton,
+  Avatar,
 } from "@nextui-org/react";
 import {
   Music2,
   Disc3,
-  Headphones,
   Sparkles,
   ListMusic,
   RefreshCcw,
@@ -34,12 +35,14 @@ type Listen = {
   played_at?: string | null; // ISO
   genre?: string | null;
   genre_tags?: string[] | null;
+  album_image_url?: string | null;
 };
 
 type Artist = {
   id: string;
   name: string;
   play_count?: number | null;
+  image_url?: string | null;
 };
 
 const fmt = (d?: string | null) => (d ? new Date(d).toLocaleString() : "—");
@@ -88,7 +91,7 @@ export default function MusicPage() {
       setListens([]);
     }
 
-    // 3) Top artists (aggregate locally)
+    // 3) Top artists (aggregate locally + fetch images)
     try {
       const map = new Map<string, number>();
       rows.forEach((r) => {
@@ -96,10 +99,24 @@ export default function MusicPage() {
         if (!key) return;
         map.set(key, (map.get(key) ?? 0) + 1);
       });
-      const agg = [...map.entries()]
+      const base = [...map.entries()]
         .map(([name, play_count], i) => ({ id: String(i), name, play_count }))
         .sort((a, b) => (b.play_count ?? 0) - (a.play_count ?? 0))
-        .slice(0, 10);
+        .slice(0, 5);
+
+      const names = base.map((a) => a.name);
+      const imgMap: Record<string, string | null> = {};
+      if (names.length) {
+        const { data } = await supabase
+          .from("spotify_artists")
+          .select("name, images")
+          .in("name", names);
+        data?.forEach((a: { name: string; images?: { url?: string }[] }) => {
+          const imgs = Array.isArray(a.images) ? a.images : [];
+          imgMap[a.name] = imgs[0]?.url ?? null;
+        });
+      }
+      const agg = base.map((a) => ({ ...a, image_url: imgMap[a.name] || null }));
       setTopArtists(agg);
     } catch {
       setTopArtists([]);
@@ -116,7 +133,7 @@ export default function MusicPage() {
       const list = [...map.entries()]
         .map(([genre, count]) => ({ genre, count }))
         .sort((a, b) => b.count - a.count)
-        .slice(0, 8);
+        .slice(0, 3);
       setTopGenres(list);
     } catch {
       setTopGenres([]);
@@ -192,19 +209,10 @@ export default function MusicPage() {
           <div className="flex gap-2">
             {connected ? (
               <>
-                <Button
-                  variant="flat"
-                  startContent={<RefreshCcw className="size-4" />}
-                  isLoading={syncing}
-                  onPress={syncNow}
-                >
+                <Button onPress={syncNow} isLoading={syncing}>
                   Sync now
                 </Button>
-                <Button
-                  variant="flat"
-                  startContent={<Play className="size-4" />}
-                  onPress={playBoosters}
-                >
+                <Button color="primary" startContent={<Play className="size-4" />} onPress={playBoosters}>
                   Play boosters
                 </Button>
               </>
@@ -221,15 +229,53 @@ export default function MusicPage() {
         </CardHeader>
       </Card>
 
+      {/* Top genres */}
+      <Card className="border border-white/10 bg-white/5">
+        <CardHeader className="flex items-center gap-3">
+          <div className="rounded-xl bg-gradient-to-br from-indigo-400 to-violet-500 p-2 ring-1 ring-white/20">
+            <Radio className="size-5" />
+          </div>
+          <div>
+            <h2 className="text-lg font-semibold">Top genres</h2>
+            <p className="text-xs text-white/60">Based on your recent listening</p>
+          </div>
+        </CardHeader>
+        <CardBody className="grid gap-2">
+          {loading ? (
+            Array.from({ length: 3 }).map((_, i) => (
+              <Skeleton key={i} className="h-10 rounded-xl" />
+            ))
+          ) : topGenres.length ? (
+            topGenres.map((g) => (
+              <div
+                key={g.genre}
+                className="flex items-center justify-between rounded-xl border border-white/10 bg-white/5 px-3 py-2"
+              >
+                <div className="flex items-center gap-2">
+                  <Music2 className="size-4" />
+                  <span className="text-sm">{g.genre}</span>
+                </div>
+                <span className="text-xs text-white/60">{g.count} plays</span>
+              </div>
+            ))
+          ) : (
+            <div className="text-sm text-white/70">Not enough data yet. Try syncing or listening a bit more.</div>
+          )}
+        </CardBody>
+      </Card>
+
       {/* Top artists */}
       <Card className="border border-white/10 bg-white/5">
         <CardHeader className="flex items-center gap-3">
-          <div className="rounded-xl bg-gradient-to-br from-pink-400 to-fuchsia-500 p-2 ring-1 ring-white/20">
+          <div className="rounded-xl bg-gradient-to-br from-fuchsia-400 to-pink-500 p-2 ring-1 ring-white/20">
             <Disc3 className="size-5" />
           </div>
-          <h2 className="text-lg font-semibold">Top artists</h2>
+          <div>
+            <h2 className="text-lg font-semibold">Top artists</h2>
+            <p className="text-xs text-white/60">Your most played</p>
+          </div>
         </CardHeader>
-        <CardBody className="space-y-2">
+        <CardBody className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           {loading ? (
             Array.from({ length: 5 }).map((_, i) => (
               <Skeleton key={i} className="h-10 rounded-xl" />
@@ -241,10 +287,10 @@ export default function MusicPage() {
                 className="flex items-center justify-between rounded-xl border border-white/10 bg-white/5 px-3 py-2"
               >
                 <div className="flex items-center gap-2">
-                  <Headphones className="size-4" />
+                  <Avatar src={a.image_url ?? undefined} name={a.name} className="w-8 h-8" />
                   <span className="text-sm">{a.name}</span>
                 </div>
-                <span className="text-xs text-white/60">{a.play_count ?? "—"}</span>
+                <span className="text-xs text-white/60">{a.play_count ?? "—"} plays</span>
               </div>
             ))
           ) : (
@@ -269,7 +315,7 @@ export default function MusicPage() {
         <CardBody className="space-y-2">
           {loading ? (
             Array.from({ length: 8 }).map((_, i) => (
-              <Skeleton key={i} className="h-12 rounded-xl" />
+              <Skeleton key={i} className="h-16 rounded-xl" />
             ))
           ) : pageTracks.length ? (
             pageTracks.map((r) => (
@@ -277,55 +323,18 @@ export default function MusicPage() {
                 key={r.id}
                 className="flex items-center justify-between gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2"
               >
-                <div className="min-w-0">
-                  <div className="truncate text-sm">
-                    {r.track_name ?? "Unknown track"}
-                    <span className="text-white/60"> — {r.artist_name ?? "Unknown"}</span>
-                  </div>
-                  <div className="mt-1 flex flex-wrap gap-1 text-xs">
-                    {r.genre && (
-                      <Chip size="sm" variant="flat" className="bg-teal-500/20">
-                        {r.genre}
-                      </Chip>
-                    )}
-                    {r.genre_tags?.slice(0, 3).map((g) => (
-                      <Chip key={g} size="sm" variant="flat" className="bg-teal-500/10">
-                        {g}
-                      </Chip>
-                    ))}
-                  </div>
-                </div>
-                <div className="shrink-0 text-xs text-white/50">{fmt(r.played_at)}</div>
-              </div>
-            ))
-          ) : (
-            <div className="text-sm text-white/70">
-              No listens yet. {connected ? "Hit “Sync now” to pull your history." : "Connect Spotify to begin."}
-            </div>
-          )}
-        </CardBody>
-        <CardFooter className="flex items-center justify-between gap-2">
-          <div className="flex gap-2">
-            <Button
-              variant="flat"
-              isDisabled={page === 0}
-              onPress={() => setPage((p) => Math.max(p - 1, 0))}
-            >
-              Prev
-            </Button>
-            <Button
-              variant="flat"
-              isDisabled={!hasNext}
-              onPress={() => setPage((p) => p + 1)}
-            >
-              Next
-            </Button>
-          </div>
-          <Button as={Link} href="/insights" variant="flat" startContent={<Sparkles className="size-4" />}>
-            See music insights
-          </Button>
-        </CardFooter>
-      </Card>
-    </main>
-  );
-}
+                <div className="flex items-center gap-3 min-w-0">
+                  {r.album_image_url && (
+                    <Image
+                      src={r.album_image_url}
+                      alt=""
+                      width={40}
+                      height={40}
+                      className="h-10 w-10 shrink-0 rounded-md object-cover"
+                    />
+                  )}
+                  <div className="min-w-0">
+                    <div className="truncate text-sm">
+                      {r.track_name ?? "Unknown track"}
+                      <span className="text-white/60"> — {r.artist_name ?? "Unknown"}</span>
+                    </div>
