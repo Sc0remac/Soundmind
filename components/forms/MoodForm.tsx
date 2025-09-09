@@ -1,7 +1,7 @@
 // components/forms/MoodForm.tsx
 "use client";
 import { useState } from "react";
-import { supabase } from "@/lib/supabase"; // your existing client
+import { supabase } from "@/lib/supabaseClient"; // your existing client
 import { Card, CardHeader, CardBody, CardFooter, Button, Chip } from "@nextui-org/react";
 import { Brain, Heart, Music2, CalendarDays, Sun, Moon, Smile, Meh, Frown, Clock } from "lucide-react";
 

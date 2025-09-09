@@ -1,7 +1,7 @@
 // components/forms/WorkoutForm.tsx
 "use client";
 import { useState } from "react";
-import { supabase } from "@/lib/supabase"; // your existing client
+import { supabase } from "@/lib/supabaseClient"; // your existing client
 import { Card, CardHeader, CardBody, CardFooter, Button, Chip } from "@nextui-org/react";
 import { Dumbbell, Activity, Flame, CalendarDays, Plus, Minus, Clock } from "lucide-react";
 

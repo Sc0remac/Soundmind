@@ -1,7 +1,7 @@
 // app/profile/page.tsx
 "use client";
 import { useEffect, useState } from "react";
-import { supabase } from "@/lib/supabase";
+import { supabase } from "@/lib/supabaseClient";
 import { Card, CardBody, CardHeader, Button } from "@nextui-org/react";
 import { User as UserIcon, Music2, Activity, Brain, CheckCircle2 } from "lucide-react";
 import Link from "next/link";
