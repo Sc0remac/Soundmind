@@ -2,261 +2,312 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { supabase } from "@/lib/supabase";
 import {
-  Card,
-  CardBody,
-  CardHeader,
-  Button,
-  Input,
-  Chip,
-  Divider,
-  Avatar,
-  Spinner,
+  Card, CardHeader, CardBody, CardFooter,
+  Button, Chip, Skeleton
 } from "@nextui-org/react";
-import { Music2, Link as LinkIcon } from "lucide-react";
-import { supabase } from "@/lib/supabaseClient";
+import {
+  Music2, Disc3, Headphones, Sparkles, ListMusic,
+  RefreshCcw, Play, PlugZap, BadgeCheck, Radio
+} from "lucide-react";
 
+// --- types kept intentionally loose to tolerate small schema drift ---
 type Listen = {
-  played_at: string;
+  id: string;
   track_name?: string | null;
   artist_name?: string | null;
   album_name?: string | null;
-  bpm?: number | null;
-  energy?: number | null; // 0..1 expected if present
-  source?: string | null;
-  track_uri?: string | null; // e.g. spotify:track:ID
-  image_url?: string | null;
+  played_at?: string | null; // ISO
+  genre?: string | null;
 };
 
-function toEnergyBucket(energy?: number | null, bpm?: number | null) {
-  if (energy != null && !Number.isNaN(energy)) {
-    if (energy < 0.33) return "low";
-    if (energy < 0.66) return "mid";
-    return "high";
-  }
-  if (bpm != null && !Number.isNaN(bpm)) {
-    if (bpm < 110) return "low";
-    if (bpm < 128) return "mid";
-    return "high";
-  }
-  return null;
-}
+type Artist = {
+  id: string;
+  name: string;
+  play_count?: number | null;
+};
 
-function spotifyTrackUrlFromUri(uri?: string | null) {
-  if (!uri) return null;
-  // spotify:track:ID
-  const parts = uri.split(":");
-  if (parts.length === 3 && parts[1] === "track") {
-    return `https://open.spotify.com/track/${parts[2]}`;
-  }
-  return null;
-}
-
-function fallbackSpotifySearch(track?: string | null, artist?: string | null) {
-  const q = [track, artist].filter(Boolean).join(" ");
-  return q ? `https://open.spotify.com/search/${encodeURIComponent(q)}` : null;
-}
-
-function timeAgo(iso: string) {
-  const d = new Date(iso);
-  const s = Math.floor((Date.now() - d.getTime()) / 1000);
-  if (s < 60) return `${s}s ago`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ago`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
-  const dys = Math.floor(h / 24);
-  return `${dys}d ago`;
-}
+const fmt = (d?: string | null) =>
+  d ? new Date(d).toLocaleString() : "—";
 
 export default function MusicPage() {
-  const [query, setQuery] = useState("");
-  const [list, setList] = useState<Listen[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [connected, setConnected] = useState<boolean>(false);
+  const [recent, setRecent] = useState<Listen[]>([]);
+  const [topArtists, setTopArtists] = useState<Artist[]>([]);
+  const [topGenres, setTopGenres] = useState<{ genre: string; count: number }[]>([]);
+  const [syncing, setSyncing] = useState(false);
 
   useEffect(() => {
+    let active = true;
     (async () => {
       setLoading(true);
-      // Best-effort: view may expose different names; select '*' then map.
-      const { data, error } = await supabase
-        .from("v_spotify_listens_expanded")
-        .select("*")
-        .order("played_at", { ascending: false })
-        .limit(100);
 
-      if (error) {
-        // Soft-fail: just show an empty state; you can toast if you have a toaster.
-        setList([]);
-        setLoading(false);
-        return;
+      // 1) Spotify connection (profiles.spotify_connected)
+      try {
+        const { data: prof } = await supabase.from("profiles")
+          .select("spotify_connected")
+          .single();
+        if (active) setConnected(Boolean(prof?.spotify_connected));
+      } catch {
+        if (active) setConnected(false);
       }
 
-      const rows = (data || []) as any[];
-      const mapped: Listen[] = rows.map((r) => ({
-        played_at: r.played_at || r.listened_at || r.timestamp,
-        track_name: r.track_name || r.name || r.title,
-        artist_name: r.artist_name || r.artist || r.primary_artist,
-        album_name: r.album_name || r.album,
-        bpm: r.bpm || r.tempo || null,
-        energy: r.energy ?? r.energy_score ?? null,
-        source: r.source || "Spotify",
-        track_uri: r.track_uri || r.spotify_uri || null,
-        image_url:
-          r.image_url ||
-          r.album_image_url ||
-          r.cover_url ||
-          r.artwork_url ||
-          r.track_image_url ||
-          null,
-      }));
-      setList(mapped);
-      setLoading(false);
-    })();
-  }, []);
+      // 2) Recent listens (fallback-friendly)
+      try {
+        const { data, error } = await supabase
+          .from("spotify_listens")
+          .select("id, track_name, artist_name, album_name, played_at, genre")
+          .order("played_at", { ascending: false })
+          .limit(12);
+        if (!error && active) setRecent((data as Listen[]) ?? []);
+      } catch {
+        if (active) setRecent([]);
+      }
 
-  const filtered = useMemo(() => {
-    if (!query) return list;
-    const q = query.toLowerCase();
-    return list.filter((x) => {
-      return (
-        (x.track_name || "").toLowerCase().includes(q) ||
-        (x.artist_name || "").toLowerCase().includes(q) ||
-        (x.album_name || "").toLowerCase().includes(q)
-      );
-    });
-  }, [list, query]);
+      // 3) Top artists (try artists table, else aggregate listens)
+      try {
+        const { data: artists } = await supabase
+          .from("spotify_artists")
+          .select("id, name, play_count")
+          .order("play_count", { ascending: false })
+          .limit(10);
+        if (artists && artists.length) {
+          if (active) setTopArtists(artists as unknown as Artist[]);
+        } else {
+          // aggregate from listens as fallback
+          const map = new Map<string, number>();
+          recent.forEach(r => {
+            const key = r.artist_name ?? "";
+            if (!key) return;
+            map.set(key, (map.get(key) ?? 0) + 1);
+          });
+          const agg = [...map.entries()]
+            .map(([name, play_count], i) => ({ id: String(i), name, play_count }))
+            .sort((a, b) => (b.play_count ?? 0) - (a.play_count ?? 0))
+            .slice(0, 10);
+          if (active) setTopArtists(agg);
+        }
+      } catch {
+        if (active) setTopArtists([]);
+      }
+
+      // 4) Top genres (aggregate locally)
+      try {
+        const map = new Map<string, number>();
+        recent.forEach(r => {
+          const g = (r.genre ?? "").trim();
+          if (!g) return;
+          map.set(g, (map.get(g) ?? 0) + 1);
+        });
+        const list = [...map.entries()]
+          .map(([genre, count]) => ({ genre, count }))
+          .sort((a, b) => b.count - a.count)
+          .slice(0, 8);
+        if (active) setTopGenres(list);
+      } catch {
+        if (active) setTopGenres([]);
+      }
+
+      if (active) setLoading(false);
+    })();
+
+    return () => { active = false; };
+  }, []); // run once
+
+  const hasData = useMemo(
+    () => (recent?.length ?? 0) > 0 || (topArtists?.length ?? 0) > 0 || (topGenres?.length ?? 0) > 0,
+    [recent, topArtists, topGenres]
+  );
+
+  const connect = () => {
+    // Kick off OAuth via your existing endpoint
+    window.location.href = "/api/spotify/start";
+  };
+
+  const syncNow = async () => {
+    setSyncing(true);
+    try {
+      // Your GET returned 405 earlier; use POST.
+      const res = await fetch("/api/spotify/my/sync", { method: "POST" });
+      if (!res.ok) throw new Error("Sync failed");
+    } catch {
+      // noop – could toast error here
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const playBoosters = () => {
+    // Delegate to your existing “play boosters” server action/endpoint if you add one,
+    // for now redirect to Insights which already has the CTA.
+    window.location.href = "/insights";
+  };
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-end justify-between gap-3 flex-wrap">
-        <h1 className="text-2xl font-semibold">Music</h1>
-        <div className="flex items-center gap-2">
-          <Button
-            as="a"
-            href="/api/spotify/start"
-            color="primary"
-            variant="solid"
-            startContent={<Music2 size={16} />}
-          >
-            Connect Spotify
-          </Button>
-          <Button as="a" href="/api/spotify/my/sync" variant="flat">
-            Sync plays
-          </Button>
+    <main className="space-y-6">
+      {/* Heading */}
+      <div className="flex items-center gap-3">
+        <div className="rounded-xl bg-gradient-to-br from-sky-400 to-cyan-500 p-2 ring-1 ring-white/20">
+          <Music2 className="size-5" />
         </div>
+        <h1 className="text-xl font-semibold">Music</h1>
       </div>
 
-      <Card className="shadow-md">
-        <CardHeader className="justify-between">
-          <div className="flex items-center gap-2">
-            <Music2 size={18} />
-            <div className="font-medium">Recent listens</div>
-          </div>
-          <Input
-            placeholder="Search tracks, artists, albums"
-            value={query}
-            onValueChange={setQuery}
-            className="w-72 max-w-full"
-          />
-        </CardHeader>
-        <Divider />
-        <CardBody className="space-y-2">
-          {loading ? (
-            <div className="flex items-center justify-center py-10">
-              <Spinner label="Loading your recent plays…" />
+      {/* Connection & quick actions */}
+      <Card className="border border-white/10 bg-white/5">
+        <CardHeader className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="rounded-lg bg-emerald-500/15 p-2 ring-1 ring-emerald-500/30">
+              {connected ? <BadgeCheck className="size-4" /> : <PlugZap className="size-4" />}
             </div>
-          ) : filtered.length === 0 ? (
-            <EmptyState />
-          ) : (
-            <div className="divide-y divide-default-200/60">
-              {filtered.map((t, idx) => (
-                <TrackRow key={`${t.played_at}-${idx}`} item={t} />
+            <div>
+              <div className="text-sm font-medium">
+                {connected ? "Spotify connected" : "Connect Spotify to unlock insights"}
+              </div>
+              <div className="text-xs text-white/60">
+                {connected
+                  ? "We’ll sync your listens to correlate with workouts and mood."
+                  : "Playlists, boosters, and correlation require a quick connect."}
+              </div>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {!connected ? (
+              <Button color="success" startContent={<PlugZap className="size-4" />} onPress={connect}>
+                Connect Spotify
+              </Button>
+            ) : (
+              <>
+                <Button
+                  variant="flat"
+                  startContent={<RefreshCcw className="size-4" />}
+                  onPress={syncNow}
+                  isLoading={syncing}
+                >
+                  Sync now
+                </Button>
+                <Button color="primary" startContent={<Play className="size-4" />} onPress={playBoosters}>
+                  Play boosters
+                </Button>
+              </>
+            )}
+          </div>
+        </CardHeader>
+      </Card>
+
+      {/* Top genres */}
+      <Card className="border border-white/10 bg-white/5">
+        <CardHeader className="flex items-center gap-3">
+          <div className="rounded-xl bg-gradient-to-br from-indigo-400 to-violet-500 p-2 ring-1 ring-white/20">
+            <Radio className="size-5" />
+          </div>
+          <div>
+            <h2 className="text-lg font-semibold">Top genres</h2>
+            <p className="text-xs text-white/60">Based on your recent listening</p>
+          </div>
+        </CardHeader>
+        <CardBody>
+          {loading ? (
+            <div className="flex flex-wrap gap-2">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <Skeleton key={i} className="h-7 w-28 rounded-xl" />
               ))}
             </div>
+          ) : topGenres.length ? (
+            <div className="flex flex-wrap gap-2">
+              {topGenres.map((g) => (
+                <Chip key={g.genre} variant="flat" className="bg-indigo-500/20">
+                  {g.genre} · {g.count}
+                </Chip>
+              ))}
+            </div>
+          ) : (
+            <div className="text-sm text-white/70">Not enough data yet. Try syncing or listening a bit more.</div>
           )}
         </CardBody>
       </Card>
-    </div>
-  );
-}
 
-/* ---------------- Components ---------------- */
+      {/* Top artists */}
+      <Card className="border border-white/10 bg-white/5">
+        <CardHeader className="flex items-center gap-3">
+          <div className="rounded-xl bg-gradient-to-br from-fuchsia-400 to-pink-500 p-2 ring-1 ring-white/20">
+            <Disc3 className="size-5" />
+          </div>
+          <div>
+            <h2 className="text-lg font-semibold">Top artists</h2>
+            <p className="text-xs text-white/60">Your most played</p>
+          </div>
+        </CardHeader>
+        <CardBody className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          {loading ? (
+            Array.from({ length: 6 }).map((_, i) => (
+              <Skeleton key={i} className="h-10 rounded-xl" />
+            ))
+          ) : topArtists.length ? (
+            topArtists.map((a) => (
+              <div
+                key={a.id}
+                className="flex items-center justify-between rounded-xl border border-white/10 bg-white/5 px-3 py-2"
+              >
+                <div className="flex items-center gap-2">
+                  <Headphones className="size-4" />
+                  <span className="text-sm">{a.name}</span>
+                </div>
+                <span className="text-xs text-white/60">{a.play_count ?? "—"}</span>
+              </div>
+            ))
+          ) : (
+            <div className="text-sm text-white/70">No artist data yet.</div>
+          )}
+        </CardBody>
+      </Card>
 
-function TrackRow({ item }: { item: Listen }) {
-  const energyBucket = toEnergyBucket(item.energy ?? null, item.bpm ?? null);
-
-  const spotifyUrl =
-    spotifyTrackUrlFromUri(item.track_uri) ||
-    fallbackSpotifySearch(item.track_name, item.artist_name);
-
-  const energyChip =
-    energyBucket === "high"
-      ? { label: "High", color: "success" as const }
-      : energyBucket === "mid"
-      ? { label: "Mid", color: "warning" as const }
-      : energyBucket === "low"
-      ? { label: "Low", color: "default" as const }
-      : null;
-
-  return (
-    <div className="flex items-center gap-3 py-3">
-      <Avatar
-        radius="sm"
-        className="shrink-0"
-        src={item.image_url || undefined}
-        name={(item.track_name || "?").charAt(0)}
-      />
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2 min-w-0">
-          <div className="font-medium truncate">{item.track_name || "Unknown track"}</div>
-          <div className="text-default-500 truncate">· {item.artist_name || "Unknown artist"}</div>
-        </div>
-        <div className="text-xs text-default-500 truncate">
-          {item.album_name || "—"} • {timeAgo(item.played_at)}
-        </div>
-      </div>
-      <div className="hidden sm:flex items-center gap-2">
-        {item.bpm ? (
-          <Chip size="sm" variant="flat">
-            {Math.round(item.bpm)} BPM
-          </Chip>
-        ) : null}
-        {item.energy != null ? (
-          <Chip size="sm" variant="flat">
-            Energy {Math.round((item.energy || 0) * 100)}
-          </Chip>
-        ) : null}
-        {energyChip ? (
-          <Chip size="sm" color={energyChip.color} variant="flat">
-            {energyChip.label}
-          </Chip>
-        ) : null}
-        <Chip size="sm" variant="bordered">
-          {item.source || "Spotify"}
-        </Chip>
-      </div>
-      {spotifyUrl ? (
-        <Button
-          as="a"
-          href={spotifyUrl}
-          target="_blank"
-          rel="noreferrer"
-          size="sm"
-          variant="light"
-          startContent={<LinkIcon size={14} />}
-          className="ml-2"
-        >
-          Open
-        </Button>
-      ) : null}
-    </div>
-  );
-}
-
-function EmptyState() {
-  return (
-    <div className="py-14 text-center text-sm text-default-500">
-      No listens found. Try syncing your plays or refining your search.
-    </div>
+      {/* Recent listens */}
+      <Card className="border border-white/10 bg-white/5">
+        <CardHeader className="flex items-center gap-3">
+          <div className="rounded-xl bg-gradient-to-br from-emerald-400 to-teal-500 p-2 ring-1 ring-white/20">
+            <ListMusic className="size-5" />
+          </div>
+          <div>
+            <h2 className="text-lg font-semibold">Recent listens</h2>
+            <p className="text-xs text-white/60">Last 12 tracks we’ve seen</p>
+          </div>
+        </CardHeader>
+        <CardBody className="space-y-2">
+          {loading ? (
+            Array.from({ length: 8 }).map((_, i) => (
+              <Skeleton key={i} className="h-12 rounded-xl" />
+            ))
+          ) : recent.length ? (
+            recent.map((r) => (
+              <div
+                key={r.id}
+                className="flex items-center justify-between gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2"
+              >
+                <div className="min-w-0">
+                  <div className="truncate text-sm">
+                    {r.track_name ?? "Unknown track"} <span className="text-white/60">— {r.artist_name ?? "Unknown"}</span>
+                  </div>
+                  <div className="truncate text-xs text-white/50">{r.album_name ?? ""}</div>
+                </div>
+                <div className="shrink-0 text-xs text-white/50">{fmt(r.played_at)}</div>
+              </div>
+            ))
+          ) : (
+            <div className="text-sm text-white/70">
+              No listens yet. {connected ? "Hit “Sync now” to pull your history." : "Connect Spotify to begin."}
+            </div>
+          )}
+        </CardBody>
+        <CardFooter className="flex items-center justify-end gap-2">
+          <Button as={Link} href="/insights" variant="flat" startContent={<Sparkles className="size-4" />}>
+            See music insights
+          </Button>
+        </CardFooter>
+      </Card>
+    </main>
   );
 }
