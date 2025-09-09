@@ -3,18 +3,27 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-// Use the existing browser supabase client so the page can compile and
-// execute correctly. The previous import pointed to a non-existent module
-// (`@/lib/supabase`), causing Next.js to throw a "module not found" build
-// error when navigating to the music page.
 import { supabase } from "@/lib/supabaseClient";
 import {
-  Card, CardHeader, CardBody, CardFooter,
-  Button, Chip, Skeleton
+  Card,
+  CardHeader,
+  CardBody,
+  CardFooter,
+  Button,
+  Chip,
+  Skeleton,
 } from "@nextui-org/react";
 import {
-  Music2, Disc3, Headphones, Sparkles, ListMusic,
-  RefreshCcw, Play, PlugZap, BadgeCheck, Radio
+  Music2,
+  Disc3,
+  Headphones,
+  Sparkles,
+  ListMusic,
+  RefreshCcw,
+  Play,
+  PlugZap,
+  BadgeCheck,
+  Radio,
 } from "lucide-react";
 
 // --- types kept intentionally loose to tolerate small schema drift ---
@@ -22,9 +31,9 @@ type Listen = {
   id: string;
   track_name?: string | null;
   artist_name?: string | null;
-  album_name?: string | null;
   played_at?: string | null; // ISO
   genre?: string | null;
+  genre_tags?: string[] | null;
 };
 
 type Artist = {
@@ -33,121 +42,132 @@ type Artist = {
   play_count?: number | null;
 };
 
-const fmt = (d?: string | null) =>
-  d ? new Date(d).toLocaleString() : "—";
+const fmt = (d?: string | null) => (d ? new Date(d).toLocaleString() : "—");
+
+const PAGE_SIZE = 20;
 
 export default function MusicPage() {
   const [loading, setLoading] = useState(true);
-  const [connected, setConnected] = useState<boolean>(false);
-  const [recent, setRecent] = useState<Listen[]>([]);
+  const [connected, setConnected] = useState(false);
+  const [listens, setListens] = useState<Listen[]>([]);
   const [topArtists, setTopArtists] = useState<Artist[]>([]);
   const [topGenres, setTopGenres] = useState<{ genre: string; count: number }[]>([]);
   const [syncing, setSyncing] = useState(false);
+  const [page, setPage] = useState(0);
+
+  const loadAll = async () => {
+    setLoading(true);
+    // 1) Spotify connection flag
+    try {
+      const { data: prof } = await supabase
+        .from("profiles")
+        .select("spotify_connected")
+        .single();
+      setConnected(Boolean(prof?.spotify_connected));
+    } catch {
+      setConnected(false);
+    }
+
+    // 2) Full listen history
+    let rows: Listen[] = [];
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      const headers = session?.access_token
+        ? { Authorization: `Bearer ${session.access_token}` }
+        : undefined;
+      const res = await fetch("/api/music/list", { headers });
+      if (res.ok) {
+        const json = await res.json();
+        rows = json.rows ?? [];
+      }
+      setListens(rows);
+      setPage(0);
+    } catch {
+      setListens([]);
+    }
+
+    // 3) Top artists (aggregate locally)
+    try {
+      const map = new Map<string, number>();
+      rows.forEach((r) => {
+        const key = r.artist_name ?? "";
+        if (!key) return;
+        map.set(key, (map.get(key) ?? 0) + 1);
+      });
+      const agg = [...map.entries()]
+        .map(([name, play_count], i) => ({ id: String(i), name, play_count }))
+        .sort((a, b) => (b.play_count ?? 0) - (a.play_count ?? 0))
+        .slice(0, 10);
+      setTopArtists(agg);
+    } catch {
+      setTopArtists([]);
+    }
+
+    // 4) Top genres (aggregate locally)
+    try {
+      const map = new Map<string, number>();
+      rows.forEach((r) => {
+        const g = (r.genre ?? "").trim();
+        if (!g) return;
+        map.set(g, (map.get(g) ?? 0) + 1);
+      });
+      const list = [...map.entries()]
+        .map(([genre, count]) => ({ genre, count }))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 8);
+      setTopGenres(list);
+    } catch {
+      setTopGenres([]);
+    }
+
+    setLoading(false);
+  };
 
   useEffect(() => {
-    let active = true;
-    (async () => {
-      setLoading(true);
-
-      // 1) Spotify connection (profiles.spotify_connected)
-      try {
-        const { data: prof } = await supabase.from("profiles")
-          .select("spotify_connected")
-          .single();
-        if (active) setConnected(Boolean(prof?.spotify_connected));
-      } catch {
-        if (active) setConnected(false);
-      }
-
-        // 2) Recent listens (fallback-friendly)
-        let listens: Listen[] = [];
-        try {
-          const { data, error } = await supabase
-            .from("spotify_listens")
-            .select("id, track_name, artist_name, album_name, played_at, genre")
-            .order("played_at", { ascending: false })
-            .limit(12);
-          if (!error && data) listens = data as Listen[];
-          if (active) setRecent(listens);
-        } catch {
-          if (active) setRecent([]);
-        }
-
-        // 3) Top artists (try artists table, else aggregate listens)
-        try {
-          const { data: artists } = await supabase
-            .from("spotify_artists")
-            .select("id, name, play_count")
-            .order("play_count", { ascending: false })
-            .limit(10);
-          if (artists && artists.length) {
-            if (active) setTopArtists(artists as unknown as Artist[]);
-          } else {
-            // aggregate from listens as fallback
-            const map = new Map<string, number>();
-            listens.forEach((r) => {
-              const key = r.artist_name ?? "";
-              if (!key) return;
-              map.set(key, (map.get(key) ?? 0) + 1);
-            });
-            const agg = [...map.entries()]
-              .map(([name, play_count], i) => ({ id: String(i), name, play_count }))
-              .sort((a, b) => (b.play_count ?? 0) - (a.play_count ?? 0))
-              .slice(0, 10);
-            if (active) setTopArtists(agg);
-          }
-        } catch {
-          if (active) setTopArtists([]);
-        }
-
-        // 4) Top genres (aggregate locally)
-        try {
-          const map = new Map<string, number>();
-          listens.forEach((r) => {
-            const g = (r.genre ?? "").trim();
-            if (!g) return;
-            map.set(g, (map.get(g) ?? 0) + 1);
-          });
-          const list = [...map.entries()]
-            .map(([genre, count]) => ({ genre, count }))
-            .sort((a, b) => b.count - a.count)
-            .slice(0, 8);
-          if (active) setTopGenres(list);
-        } catch {
-          if (active) setTopGenres([]);
-        }
-
-      if (active) setLoading(false);
-    })();
-
-    return () => { active = false; };
-  }, []); // run once
+    loadAll();
+  }, []);
 
   const connect = () => {
-    // Kick off OAuth via your existing endpoint
     window.location.href = "/api/spotify/start";
   };
 
   const syncNow = async () => {
     setSyncing(true);
     try {
+<<<<<<< ours
       const { data: { session } } = await supabase.auth.getSession();
       const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined;
       const res = await fetch("/api/spotify/my/sync", { method: "POST", headers });
       if (!res.ok) throw new Error("Sync failed");
       await fetch("/api/enrich/run", { method: "POST", headers });
+=======
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      const headers = session?.access_token
+        ? { Authorization: `Bearer ${session.access_token}` }
+        : undefined;
+      const res = await fetch("/api/spotify/my/sync", { method: "POST", headers });
+      if (!res.ok) throw new Error("Sync failed");
+      await fetch("/api/enrich/run", { method: "POST", headers });
+      await loadAll();
+>>>>>>> theirs
     } catch {
-      // noop – could toast error here
+      // could toast an error
     } finally {
       setSyncing(false);
     }
   };
 
   const playBoosters = () => {
-    // Delegate to your existing “play boosters” server action/endpoint if you add one,
-    // for now redirect to Insights which already has the CTA.
     window.location.href = "/insights";
   };
+
+  const start = page * PAGE_SIZE;
+  const pageTracks = listens.slice(start, start + PAGE_SIZE);
+  const hasNext = start + PAGE_SIZE < listens.length;
 
   return (
     <main className="space-y-6">
@@ -276,7 +296,9 @@ export default function MusicPage() {
           </div>
           <div>
             <h2 className="text-lg font-semibold">Recent listens</h2>
-            <p className="text-xs text-white/60">Last 12 tracks we’ve seen</p>
+            <p className="text-xs text-white/60">
+              Showing {pageTracks.length} of {listens.length}
+            </p>
           </div>
         </CardHeader>
         <CardBody className="space-y-2">
@@ -284,17 +306,29 @@ export default function MusicPage() {
             Array.from({ length: 8 }).map((_, i) => (
               <Skeleton key={i} className="h-12 rounded-xl" />
             ))
-          ) : recent.length ? (
-            recent.map((r) => (
+          ) : pageTracks.length ? (
+            pageTracks.map((r) => (
               <div
                 key={r.id}
                 className="flex items-center justify-between gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2"
               >
                 <div className="min-w-0">
                   <div className="truncate text-sm">
-                    {r.track_name ?? "Unknown track"} <span className="text-white/60">— {r.artist_name ?? "Unknown"}</span>
+                    {r.track_name ?? "Unknown track"}
+                    <span className="text-white/60"> — {r.artist_name ?? "Unknown"}</span>
                   </div>
-                  <div className="truncate text-xs text-white/50">{r.album_name ?? ""}</div>
+                  <div className="mt-1 flex flex-wrap gap-1 text-xs">
+                    {r.genre && (
+                      <Chip size="sm" variant="flat" className="bg-teal-500/20">
+                        {r.genre}
+                      </Chip>
+                    )}
+                    {r.genre_tags?.slice(0, 3).map((g) => (
+                      <Chip key={g} size="sm" variant="flat" className="bg-teal-500/10">
+                        {g}
+                      </Chip>
+                    ))}
+                  </div>
                 </div>
                 <div className="shrink-0 text-xs text-white/50">{fmt(r.played_at)}</div>
               </div>
@@ -305,7 +339,23 @@ export default function MusicPage() {
             </div>
           )}
         </CardBody>
-        <CardFooter className="flex items-center justify-end gap-2">
+        <CardFooter className="flex items-center justify-between gap-2">
+          <div className="flex gap-2">
+            <Button
+              variant="flat"
+              isDisabled={page === 0}
+              onPress={() => setPage((p) => Math.max(p - 1, 0))}
+            >
+              Prev
+            </Button>
+            <Button
+              variant="flat"
+              isDisabled={!hasNext}
+              onPress={() => setPage((p) => p + 1)}
+            >
+              Next
+            </Button>
+          </div>
           <Button as={Link} href="/insights" variant="flat" startContent={<Sparkles className="size-4" />}>
             See music insights
           </Button>
@@ -314,3 +364,4 @@ export default function MusicPage() {
     </main>
   );
 }
+
