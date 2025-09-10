@@ -1,4 +1,3 @@
-// app/music/page.tsx
 "use client";
 
 import { useEffect, useState } from "react";
@@ -338,3 +337,64 @@ export default function MusicPage() {
                       {r.track_name ?? "Unknown track"}
                       <span className="text-white/60"> — {r.artist_name ?? "Unknown"}</span>
                     </div>
+                    <div className="mt-1 flex flex-wrap items-center gap-1 text-xs">
+                      {r.genre && (
+                        <>
+                          <span className="text-white/60">Genre:</span>
+                          <Chip size="sm" variant="flat" className="bg-teal-500/20">
+                            {r.genre}
+                          </Chip>
+                        </>
+                      )}
+                      {r.genre_tags && r.genre_tags.length > 0 && (
+                        <>
+                          <span className="text-white/60">Sub-genres:</span>
+                          {r.genre_tags.slice(0, 3).map((g) => (
+                            <Chip
+                              key={g}
+                              size="sm"
+                              variant="flat"
+                              className="bg-teal-500/10"
+                            >
+                              {g}
+                            </Chip>
+                          ))}
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </div>
+                <div className="shrink-0 text-xs text-white/50">{fmt(r.played_at)}</div>
+              </div>
+            ))
+          ) : (
+            <div className="text-sm text-white/70">
+              No listens yet. {connected ? "Hit “Sync now” to pull your history." : "Connect Spotify to begin."}
+            </div>
+          )}
+        </CardBody>
+        <CardFooter className="flex items-center justify-between gap-2">
+          <div className="flex gap-2">
+            <Button
+              variant="flat"
+              isDisabled={page === 0}
+              onPress={() => setPage((p) => Math.max(p - 1, 0))}
+            >
+              Prev
+            </Button>
+            <Button
+              variant="flat"
+              isDisabled={!hasNext}
+              onPress={() => setPage((p) => p + 1)}
+            >
+              Next
+            </Button>
+          </div>
+          <Button as={Link} href="/insights" variant="flat" startContent={<Sparkles className="size-4" />}>
+            See music insights
+          </Button>
+        </CardFooter>
+      </Card>
+    </main>
+  );
+}
