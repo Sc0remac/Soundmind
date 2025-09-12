@@ -5,7 +5,11 @@ import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 
 export default function NavBar() {
+<<<<<<< ours
   const [user, setUser] = useState<null | { id: string }>(null);
+=======
+  const [user, setUser] = useState<null | { id: string; email?: string }>(null);
+>>>>>>> theirs
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => setUser(data.user));
@@ -22,6 +26,7 @@ export default function NavBar() {
   }
 
   return (
+<<<<<<< ours
     <header className="mb-6 flex items-center justify-between">
       <Link href="/" className="group inline-flex items-center gap-2">
         <div className="h-9 w-9 rounded-xl bg-gradient-to-br from-indigo-400 to-violet-500 shadow-card" />
@@ -78,6 +83,63 @@ export default function NavBar() {
         )}
       </nav>
     </header>
+=======
+    <nav className="border-b bg-white/70 backdrop-blur">
+      <div className="mx-auto flex max-w-6xl items-center justify-between py-3 px-4">
+        <Link href="/" className="font-semibold">
+          Soundmind
+        </Link>
+
+        <div className="flex items-center gap-4 text-sm">
+          {user ? (
+            <>
+              <Link href="/log-workout" className="hover:underline">
+                Log Workout
+              </Link>
+              <Link href="/log-mood" className="hover:underline">
+                Log Mood
+              </Link>
+              <Link href="/music" className="hover:underline">
+                Music
+              </Link>
+              <Link href="/timeline" className="hover:underline">
+                Timeline
+              </Link>
+              <Link href="/insights" className="hover:underline">
+                Insights
+              </Link>
+
+              <div className="relative group">
+                <button className="flex h-8 w-8 items-center justify-center rounded-full border bg-white hover:bg-gray-50">
+                  <span className="text-xs font-semibold">{initials}</span>
+                </button>
+                <div className="absolute right-0 z-50 mt-2 hidden w-40 rounded-lg border bg-white py-2 shadow-lg group-hover:block">
+                  <Link href="/profile" className="block px-3 py-2 text-sm hover:bg-gray-50">
+                    View Profile
+                  </Link>
+                  <button
+                    onClick={() => supabase.auth.signOut()}
+                    className="block w-full px-3 py-2 text-left text-sm hover:bg-gray-50"
+                  >
+                    Log out
+                  </button>
+                </div>
+              </div>
+            </>
+          ) : (
+            <>
+              <Link href="/login" className="hover:underline">
+                Log in
+              </Link>
+              <Link href="/signup" className="hover:underline">
+                Sign up
+              </Link>
+            </>
+          )}
+        </div>
+      </div>
+    </nav>
+>>>>>>> theirs
   );
 }
 

@@ -19,10 +19,14 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           {/* SupabaseListener keeps the browser/session in sync with cookies,
               and refreshes server components on auth changes. */}
           <SupabaseListener />
+          <NavBar />
 
           <div className="mx-auto max-w-6xl px-4 py-4">
+<<<<<<< ours
             <NavBar />
 
+=======
+>>>>>>> theirs
             {children}
           </div>
         </Providers>
