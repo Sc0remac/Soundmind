@@ -2,6 +2,7 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin, usingServiceRole } from "@/lib/supabaseServer";
 import { requireUserFromRequest } from "@/lib/auth";
+import { buildTrackArtistMaps, mergeArtistImages } from "./helpers";
 
 
 
