@@ -10,6 +10,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
+    "test": "ts-node --compiler-options '{\"module\":\"CommonJS\"}' test/isrc-route.test.ts",
     "seed:dummy": "ts-node --compiler-options '{\"module\":\"CommonJS\"}' scripts/seedDummyData.ts"
   },
   "dependencies": {
