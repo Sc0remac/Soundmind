@@ -94,12 +94,16 @@ export default function MusicPage() {
     try {
       const map = new Map<string, number>();
       rows.forEach((r) => {
-        const key = r.artist_name ?? "";
-        if (!key) return;
-        map.set(key, (map.get(key) ?? 0) + 1);
+        const names = (r.artist_name ?? "")
+          .split(",")
+          .map((n) => n.trim())
+          .filter(Boolean);
+        names.forEach((n) => {
+          map.set(n, (map.get(n) ?? 0) + 1);
+        });
       });
       const base = [...map.entries()]
-        .map(([name, play_count], i) => ({ id: String(i), name, play_count }))
+        .map(([name, play_count]) => ({ id: name, name, play_count }))
         .sort((a, b) => (b.play_count ?? 0) - (a.play_count ?? 0))
         .slice(0, 5);
 
