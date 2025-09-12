@@ -1,400 +1,253 @@
-"use client";
-
-import { useEffect, useState } from "react";
+// app/music/page.tsx
 import Link from "next/link";
 import Image from "next/image";
-import { supabase } from "@/lib/supabaseClient";
-import {
-  Card,
-  CardHeader,
-  CardBody,
-  CardFooter,
-  Button,
-  Chip,
-  Skeleton,
-  Avatar,
-} from "@nextui-org/react";
-import {
-  Music2,
-  Disc3,
-  Sparkles,
-  ListMusic,
-  RefreshCcw,
-  Play,
-  PlugZap,
-  BadgeCheck,
-  Radio,
-} from "lucide-react";
+import { getServerSupabase } from "@/lib/supabaseServer";
 
-// --- types kept intentionally loose to tolerate small schema drift ---
-type Listen = {
-  id: string;
-  track_name?: string | null;
-  artist_name?: string | null;
-  played_at?: string | null; // ISO
-  genre?: string | null;
-  genre_tags?: string[] | null;
-  album_image_url?: string | null;
-};
+// never cache user-specific output
+export const revalidate = 0;
 
-type Artist = {
-  id: string;
+// ---- Types that match your views ----
+type TopArtist = {
+  user_id: string;
+  artist_id: string;
   name: string;
-  play_count?: number | null;
-  image_url?: string | null;
+  image_url: string | null;
+  listens: number; // numeric -> number in JS
 };
 
-const fmt = (d?: string | null) => (d ? new Date(d).toLocaleString() : "—");
+type TopGenre = {
+  user_id: string;
+  genre: string;
+  listens: number;
+};
+
+type Recent = {
+  id: string;
+  user_id: string;
+  played_at: string; // ISO
+  track_id: string;
+  track_name: string | null;
+  artist_name: string | null;
+  album_image_url: string | null;
+  bpm: number | null;
+  energy: number | null;
+  valence: number | null;
+  genre: string | null;
+  preview_url: string | null;
+};
 
 const PAGE_SIZE = 20;
 
-export default function MusicPage() {
-  const [loading, setLoading] = useState(true);
-  const [connected, setConnected] = useState(false);
-  const [listens, setListens] = useState<Listen[]>([]);
-  const [topArtists, setTopArtists] = useState<Artist[]>([]);
-  const [topGenres, setTopGenres] = useState<{ genre: string; count: number }[]>([]);
-  const [syncing, setSyncing] = useState(false);
-  const [page, setPage] = useState(0);
+// ---------- small utils ----------
+function toIsoOrUndef(v?: string | string[]) {
+  if (!v) return undefined;
+  const s = Array.isArray(v) ? v[0] : v;
+  const d = new Date(s);
+  return Number.isNaN(d.getTime()) ? undefined : d.toISOString();
+}
 
-  const loadAll = async () => {
-    setLoading(true);
-    // 1) Spotify connection flag
-    try {
-      const { data: prof } = await supabase
-        .from("profiles")
-        .select("spotify_connected")
-        .single();
-      setConnected(Boolean(prof?.spotify_connected));
-    } catch {
-      setConnected(false);
-    }
+function dayKey(iso: string) {
+  const d = new Date(iso);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+    d.getDate()
+  ).padStart(2, "0")}`;
+}
 
-    // 2) Full listen history
-    let rows: Listen[] = [];
-    try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      const headers = session?.access_token
-        ? { Authorization: `Bearer ${session.access_token}` }
-        : undefined;
-      const res = await fetch("/api/music/list", { headers });
-      if (res.ok) {
-        const json = await res.json();
-        rows = json.rows ?? [];
-      }
-      setListens(rows);
-      setPage(0);
-    } catch {
-      setListens([]);
-    }
+function initials(name: string) {
+  const parts = name.trim().split(/\s+/).slice(0, 2);
+  return parts.map(p => p[0]?.toUpperCase() ?? "").join("");
+}
 
-    // 3) Top artists (aggregate locally + fetch images)
-    try {
-      const map = new Map<string, number>();
-      rows.forEach((r) => {
-        const key = r.artist_name ?? "";
-        if (!key) return;
-        map.set(key, (map.get(key) ?? 0) + 1);
-      });
-      const base = [...map.entries()]
-        .map(([name, play_count], i) => ({ id: String(i), name, play_count }))
-        .sort((a, b) => (b.play_count ?? 0) - (a.play_count ?? 0))
-        .slice(0, 5);
+// ---------- data fetchers (RLS does the scoping) ----------
+async function fetchTopArtists() {
+  const supabase = getServerSupabase();
+  const { data, error } = await supabase
+    .from("v_user_top_artists")
+    .select("user_id,artist_id,name,image_url,listens")
+    .order("listens", { ascending: false })
+    .limit(5);
+  // If the user isn't signed in, PostgREST may 401; just return empty so the page still renders.
+  if (error) return [] as TopArtist[];
+  return (data ?? []) as TopArtist[];
+}
 
-      const names = base.map((a) => a.name);
-      const imgMap: Record<string, string | null> = {};
-      if (names.length) {
-        const { data } = await supabase
-          .from("spotify_artists")
-          .select("name, images")
-          .in("name", names);
-        data?.forEach((a: { name: string; images?: { url?: string }[] }) => {
-          const imgs = Array.isArray(a.images) ? a.images : [];
-          imgMap[a.name] = imgs[0]?.url ?? null;
-        });
-      }
-      const agg = base.map((a) => ({ ...a, image_url: imgMap[a.name] || null }));
-      setTopArtists(agg);
-    } catch {
-      setTopArtists([]);
-    }
+async function fetchTopGenres() {
+  const supabase = getServerSupabase();
+  const { data, error } = await supabase
+    .from("v_user_top_genres")
+    .select("user_id,genre,listens")
+    .order("listens", { ascending: false })
+    .limit(3);
+  if (error) return [] as TopGenre[];
+  return (data ?? []) as TopGenre[];
+}
 
-    // 4) Top genres (aggregate locally)
-    try {
-      const map = new Map<string, number>();
-      rows.forEach((r) => {
-        const g = (r.genre ?? "").trim();
-        if (!g) return;
-        map.set(g, (map.get(g) ?? 0) + 1);
-      });
-      const list = [...map.entries()]
-        .map(([genre, count]) => ({ genre, count }))
-        .sort((a, b) => b.count - a.count)
-        .slice(0, 3);
-      setTopGenres(list);
-    } catch {
-      setTopGenres([]);
-    }
+async function fetchRecent(beforeISO?: string) {
+  const supabase = getServerSupabase();
+  let q = supabase
+    .from("v_recent_listens_compact")
+    .select(
+      "id,user_id,played_at,track_id,track_name,artist_name,album_image_url,bpm,energy,valence,genre,preview_url"
+    )
+    .order("played_at", { ascending: false })
+    .limit(PAGE_SIZE);
 
-    setLoading(false);
-  };
+  if (beforeISO) q = q.lt("played_at", beforeISO);
 
-  useEffect(() => {
-    loadAll();
-  }, []);
+  const { data, error } = await q;
+  if (error) return [] as Recent[];
+  return (data ?? []) as Recent[];
+}
 
-  const connect = () => {
-    window.location.href = "/api/spotify/start";
-  };
+// ---------- page ----------
+export default async function MusicPage({
+  searchParams,
+}: {
+  searchParams: { before?: string };
+}) {
+  const before = toIsoOrUndef(searchParams?.before);
 
-  const syncNow = async () => {
-    setSyncing(true);
-    try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      const headers = session?.access_token
-        ? { Authorization: `Bearer ${session.access_token}` }
-        : undefined;
-      const res = await fetch("/api/spotify/my/sync", { method: "POST", headers });
-      if (!res.ok) throw new Error("Sync failed");
-      await fetch("/api/enrich/run", { method: "POST", headers });
-      await loadAll();
-    } catch {
-      // could toast an error
-    } finally {
-      setSyncing(false);
-    }
-  };
+  // fetch sections in parallel (server)
+  const [topArtists, topGenres, recent] = await Promise.all([
+    fetchTopArtists(),
+    fetchTopGenres(),
+    fetchRecent(before),
+  ]);
 
-  const playBoosters = () => {
-    window.location.href = "/insights";
-  };
+  const nextCursor = recent.length ? recent[recent.length - 1].played_at : undefined;
 
-  const start = page * PAGE_SIZE;
-  const pageTracks = listens.slice(start, start + PAGE_SIZE);
-  const hasNext = start + PAGE_SIZE < listens.length;
+  // group recent plays by day for a nicer timeline
+  const byDay = recent.reduce<Record<string, Recent[]>>((acc, r) => {
+    (acc[dayKey(r.played_at)] ??= []).push(r);
+    return acc;
+  }, {});
 
   return (
-    <main className="space-y-6">
-      {/* Heading */}
-      <div className="flex items-center gap-3">
-        <div className="rounded-xl bg-gradient-to-br from-sky-400 to-cyan-500 p-2 ring-1 ring-white/20">
-          <Music2 className="size-5" />
+    <div className="max-w-6xl mx-auto px-4 py-8 space-y-6">
+      {/* header */}
+      <header className="flex items-center gap-3">
+        <h1 className="text-2xl font-semibold">Music</h1>
+        <div className="ml-auto text-sm opacity-70">
+          {recent.length ? `Showing latest ${recent.length} plays` : "No recent plays"}
         </div>
-        <h1 className="text-xl font-semibold">Music</h1>
+      </header>
+
+      {/* top blocks */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {/* Top artists */}
+        <section className="rounded-2xl border p-4">
+          <h2 className="text-base font-medium mb-3">Top artists</h2>
+          <ul className="space-y-3">
+            {topArtists.length === 0 && <li className="text-sm opacity-70">No data yet.</li>}
+            {topArtists.map((a) => (
+              <li key={a.artist_id} className="flex items-center gap-3">
+                {a.image_url ? (
+                  <div className="relative h-10 w-10 overflow-hidden rounded-full bg-content2/50">
+                    <Image src={a.image_url} alt={a.name} fill sizes="40px" />
+                  </div>
+                ) : (
+                  <div className="h-10 w-10 rounded-full bg-gradient-to-br from-indigo-500/30 to-fuchsia-500/30 grid place-items-center text-[11px] font-semibold">
+                    {initials(a.name)}
+                  </div>
+                )}
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-medium truncate">{a.name}</div>
+                  <div className="text-xs opacity-70">{a.listens} plays</div>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+
+        {/* Top genres */}
+        <section className="rounded-2xl border p-4">
+          <h2 className="text-base font-medium mb-3">Top genres</h2>
+          <div className="flex flex-wrap gap-2">
+            {topGenres.length === 0 && <div className="text-sm opacity-70">No data yet.</div>}
+            {topGenres.map((g) => (
+              <span key={g.genre} className="text-sm rounded-full border px-3 py-1">
+                {g.genre} • {g.listens}
+              </span>
+            ))}
+          </div>
+        </section>
       </div>
 
-      {/* Connection & quick actions */}
-      <Card className="border border-white/10 bg-white/5">
-        <CardHeader className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <div className="rounded-lg bg-emerald-500/15 p-2 ring-1 ring-emerald-500/30">
-              {connected ? <BadgeCheck className="size-4" /> : <PlugZap className="size-4" />}
-            </div>
-            <div>
-              <div className="text-sm font-medium">
-                {connected ? "Spotify connected" : "Connect Spotify to unlock insights"}
-              </div>
-              <div className="text-xs text-white/60">
-                {connected
-                  ? "We’ll sync your listens to correlate with workouts and mood."
-                  : "Playlists, boosters, and correlation require a quick connect."}
-              </div>
-            </div>
-          </div>
-          <div className="flex gap-2">
-            {connected ? (
-              <>
-                <Button onPress={syncNow} isLoading={syncing}>
-                  Sync now
-                </Button>
-                <Button color="primary" startContent={<Play className="size-4" />} onPress={playBoosters}>
-                  Play boosters
-                </Button>
-              </>
-            ) : (
-              <Button
-                variant="flat"
-                startContent={<PlugZap className="size-4" />}
-                onPress={connect}
-              >
-                Connect
-              </Button>
-            )}
-          </div>
-        </CardHeader>
-      </Card>
-
-      {/* Top genres */}
-      <Card className="border border-white/10 bg-white/5">
-        <CardHeader className="flex items-center gap-3">
-          <div className="rounded-xl bg-gradient-to-br from-indigo-400 to-violet-500 p-2 ring-1 ring-white/20">
-            <Radio className="size-5" />
-          </div>
-          <div>
-            <h2 className="text-lg font-semibold">Top genres</h2>
-            <p className="text-xs text-white/60">Based on your recent listening</p>
-          </div>
-        </CardHeader>
-        <CardBody className="grid gap-2">
-          {loading ? (
-            Array.from({ length: 3 }).map((_, i) => (
-              <Skeleton key={i} className="h-10 rounded-xl" />
-            ))
-          ) : topGenres.length ? (
-            topGenres.map((g) => (
-              <div
-                key={g.genre}
-                className="flex items-center justify-between rounded-xl border border-white/10 bg-white/5 px-3 py-2"
-              >
-                <div className="flex items-center gap-2">
-                  <Music2 className="size-4" />
-                  <span className="text-sm">{g.genre}</span>
-                </div>
-                <span className="text-xs text-white/60">{g.count} plays</span>
-              </div>
-            ))
-          ) : (
-            <div className="text-sm text-white/70">Not enough data yet. Try syncing or listening a bit more.</div>
-          )}
-        </CardBody>
-      </Card>
-
-      {/* Top artists */}
-      <Card className="border border-white/10 bg-white/5">
-        <CardHeader className="flex items-center gap-3">
-          <div className="rounded-xl bg-gradient-to-br from-fuchsia-400 to-pink-500 p-2 ring-1 ring-white/20">
-            <Disc3 className="size-5" />
-          </div>
-          <div>
-            <h2 className="text-lg font-semibold">Top artists</h2>
-            <p className="text-xs text-white/60">Your most played</p>
-          </div>
-        </CardHeader>
-        <CardBody className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-          {loading ? (
-            Array.from({ length: 5 }).map((_, i) => (
-              <Skeleton key={i} className="h-10 rounded-xl" />
-            ))
-          ) : topArtists.length ? (
-            topArtists.map((a) => (
-              <div
-                key={a.id}
-                className="flex items-center justify-between rounded-xl border border-white/10 bg-white/5 px-3 py-2"
-              >
-                <div className="flex items-center gap-2">
-                  <Avatar src={a.image_url ?? undefined} name={a.name} className="w-8 h-8" />
-                  <span className="text-sm">{a.name}</span>
-                </div>
-                <span className="text-xs text-white/60">{a.play_count ?? "—"} plays</span>
-              </div>
-            ))
-          ) : (
-            <div className="text-sm text-white/70">No artist data yet.</div>
-          )}
-        </CardBody>
-      </Card>
-
       {/* Recent listens */}
-      <Card className="border border-white/10 bg-white/5">
-        <CardHeader className="flex items-center gap-3">
-          <div className="rounded-xl bg-gradient-to-br from-emerald-400 to-teal-500 p-2 ring-1 ring-white/20">
-            <ListMusic className="size-5" />
-          </div>
-          <div>
-            <h2 className="text-lg font-semibold">Recent listens</h2>
-            <p className="text-xs text-white/60">
-              Showing {pageTracks.length} of {listens.length}
-            </p>
-          </div>
-        </CardHeader>
-        <CardBody className="space-y-2">
-          {loading ? (
-            Array.from({ length: 8 }).map((_, i) => (
-              <Skeleton key={i} className="h-16 rounded-xl" />
-            ))
-          ) : pageTracks.length ? (
-            pageTracks.map((r) => (
-              <div
-                key={r.id}
-                className="flex items-center justify-between gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2"
-              >
-                <div className="flex items-center gap-3 min-w-0">
-                  {r.album_image_url && (
-                    <Image
-                      src={r.album_image_url}
-                      alt=""
-                      width={40}
-                      height={40}
-                      className="h-10 w-10 shrink-0 rounded-md object-cover"
-                    />
-                  )}
-                  <div className="min-w-0">
-                    <div className="truncate text-sm">
-                      {r.track_name ?? "Unknown track"}
-                      <span className="text-white/60"> — {r.artist_name ?? "Unknown"}</span>
-                    </div>
-                    <div className="mt-1 flex flex-wrap items-center gap-1 text-xs">
-                      {r.genre && (
-                        <>
-                          <span className="text-white/60">Genre:</span>
-                          <Chip size="sm" variant="flat" className="bg-teal-500/20">
-                            {r.genre}
-                          </Chip>
-                        </>
-                      )}
-                      {r.genre_tags && r.genre_tags.length > 0 && (
-                        <>
-                          <span className="text-white/60">Sub-genres:</span>
-                          {r.genre_tags.slice(0, 3).map((g) => (
-                            <Chip
-                              key={g}
-                              size="sm"
-                              variant="flat"
-                              className="bg-teal-500/10"
-                            >
-                              {g}
-                            </Chip>
-                          ))}
-                        </>
-                      )}
-                    </div>
-                  </div>
+      <section className="rounded-2xl border p-4">
+        <h2 className="text-base font-medium mb-3">Recent listens</h2>
+
+        {recent.length === 0 ? (
+          <div className="text-sm opacity-70">No data yet. Try syncing Spotify.</div>
+        ) : (
+          <div className="space-y-4">
+            {Object.entries(byDay).map(([day, items]) => (
+              <div key={day} className="space-y-2">
+                <div className="text-xs uppercase tracking-wide opacity-60">
+                  {new Date(items[0].played_at).toLocaleDateString(undefined, {
+                    weekday: "short",
+                    month: "short",
+                    day: "numeric",
+                  })}
                 </div>
-                <div className="shrink-0 text-xs text-white/50">{fmt(r.played_at)}</div>
+                <ul className="space-y-2">
+                  {items.map((r) => (
+                    <li
+                      key={r.id}
+                      className="flex items-center justify-between rounded-xl bg-content2/50 p-3"
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="relative h-12 w-12 overflow-hidden rounded-lg bg-content2/50">
+                          {r.album_image_url ? (
+                            <Image
+                              src={r.album_image_url}
+                              alt={r.track_name ?? ""}
+                              fill
+                              sizes="48px"
+                            />
+                          ) : (
+                            <div className="h-12 w-12 grid place-items-center text-[10px] font-semibold bg-gradient-to-br from-sky-500/20 to-teal-500/20 rounded-lg">
+                              {initials(r.artist_name ?? "—")}
+                            </div>
+                          )}
+                        </div>
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-medium">
+                            {r.track_name ?? "Unknown track"}
+                          </div>
+                          <div className="truncate text-xs opacity-70">
+                            {r.artist_name ?? "Unknown artist"}
+                          </div>
+                          <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] opacity-70">
+                            {r.genre && <span>{r.genre}</span>}
+                            {r.bpm && <span>• {Math.round(Number(r.bpm))} bpm</span>}
+                          </div>
+                        </div>
+                      </div>
+                      <time className="shrink-0 text-xs opacity-70">
+                        {new Date(r.played_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                      </time>
+                    </li>
+                  ))}
+                </ul>
               </div>
-            ))
-          ) : (
-            <div className="text-sm text-white/70">
-              No listens yet. {connected ? "Hit “Sync now” to pull your history." : "Connect Spotify to begin."}
-            </div>
-          )}
-        </CardBody>
-        <CardFooter className="flex items-center justify-between gap-2">
-          <div className="flex gap-2">
-            <Button
-              variant="flat"
-              isDisabled={page === 0}
-              onPress={() => setPage((p) => Math.max(p - 1, 0))}
-            >
-              Prev
-            </Button>
-            <Button
-              variant="flat"
-              isDisabled={!hasNext}
-              onPress={() => setPage((p) => p + 1)}
-            >
-              Next
-            </Button>
+            ))}
           </div>
-          <Button as={Link} href="/insights" variant="flat" startContent={<Sparkles className="size-4" />}>
-            See music insights
-          </Button>
-        </CardFooter>
-      </Card>
-    </main>
+        )}
+
+        {/* Keyset pager */}
+        <div className="mt-4 flex justify-center">
+          {nextCursor && (
+            <Link
+              prefetch
+              className="text-sm rounded-full border px-4 py-2 hover:bg-content2/50"
+              href={`/music?before=${encodeURIComponent(nextCursor)}`}
+            >
+              Load older
+            </Link>
+          )}
+        </div>
+      </section>
+    </div>
   );
 }
