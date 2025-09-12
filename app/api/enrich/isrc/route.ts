@@ -57,7 +57,6 @@ async function fetchArtistsBatch(token: string, ids: string[]) {
 }
 
 // Row-building helpers shared with tests
-export { buildTrackArtistMaps, mergeArtistImages } from "./helpers";
 
 export async function POST(req: Request) {
   try {
