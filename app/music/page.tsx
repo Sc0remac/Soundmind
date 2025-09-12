@@ -112,11 +112,10 @@ export default function MusicPage() {
       if (names.length) {
         const { data } = await supabase
           .from("spotify_artists")
-          .select("name, images")
+          .select("name, image_url")
           .in("name", names);
-        data?.forEach((a: { name: string; images?: { url?: string }[] }) => {
-          const imgs = Array.isArray(a.images) ? a.images : [];
-          imgMap[a.name] = imgs[0]?.url ?? null;
+        data?.forEach((a: { name: string; image_url: string | null }) => {
+          imgMap[a.name] = a.image_url || null;
         });
       }
       const agg = base.map((a) => ({ ...a, image_url: imgMap[a.name] || null }));

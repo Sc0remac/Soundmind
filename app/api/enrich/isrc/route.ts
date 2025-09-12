@@ -80,6 +80,22 @@ async function fetchTracksBatch(token: string, ids: string[]) {
   }>;
 }
 
+async function fetchArtistsBatch(token: string, ids: string[]) {
+  const url = new URL("https://api.spotify.com/v1/artists");
+  url.searchParams.set("ids", ids.join(","));
+  const r = await fetch(url.toString(), {
+    headers: { Authorization: `Bearer ${token}` },
+    next: { revalidate: 0 },
+  });
+  if (!r.ok) {
+    const txt = await r.text();
+    throw new Error(`Spotify /v1/artists ${r.status}: ${txt}`);
+  }
+  return r.json() as Promise<{
+    artists: Array<{ id: string; images?: Array<{ url: string }> }>;
+  }>;
+}
+
 export async function POST(req: Request) {
   try {
     if (!usingServiceRole) {
@@ -151,7 +167,7 @@ export async function POST(req: Request) {
       looked += slice.length;
 
       const trackMap = new Map<string, any>();
-      const artistMap = new Map<string, { id: string; name: string }>();
+      const artistMap = new Map<string, { id: string; name: string; image_url: string | null }>();
       const linkSet = new Set<string>();
       const linkRows: { track_id: string; artist_id: string }[] = [];
 
@@ -180,7 +196,7 @@ export async function POST(req: Request) {
           for (const a of t.artists) {
             if (!a?.id) continue;
             if (!artistMap.has(a.id)) {
-              artistMap.set(a.id, { id: a.id, name: a.name ?? "" });
+              artistMap.set(a.id, { id: a.id, name: a.name ?? "", image_url: null });
             }
             const key = `${t.id}:${a.id}`;
             if (!linkSet.has(key)) {
@@ -189,6 +205,16 @@ export async function POST(req: Request) {
             }
           }
         }
+      }
+
+      const artistIds = Array.from(artistMap.keys());
+      if (artistIds.length) {
+        const art = await fetchArtistsBatch(token, artistIds);
+        art.artists?.forEach((ar: any) => {
+          const img = ar?.images?.[0]?.url || null;
+          const existing = artistMap.get(ar.id);
+          if (existing) existing.image_url = img;
+        });
       }
 
       const trackRows = Array.from(trackMap.values());

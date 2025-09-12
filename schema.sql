@@ -2620,7 +2620,7 @@ CREATE TABLE public.spotify_artists (
     name text NOT NULL,
     genres text[] DEFAULT '{}'::text[],
     popularity integer,
-    images jsonb,
+    image_url text,
     created_at timestamp with time zone DEFAULT now(),
     updated_at timestamp with time zone DEFAULT now()
 );

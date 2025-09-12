@@ -117,7 +117,7 @@ export async function POST(req: Request) {
       preview_url: string | null;
     };
 
-    type ArtistRow = { id: string; name: string };
+    type ArtistRow = { id: string; name: string; image_url: string | null };
     type TrackArtistRow = { track_id: string; artist_id: string };
 
     // 6) Build rows
@@ -152,7 +152,7 @@ export async function POST(req: Request) {
         for (const a of tr.artists) {
           if (!a?.id) continue;
           if (!artistMap.has(a.id)) {
-            artistMap.set(a.id, { id: a.id, name: a.name ?? "" });
+            artistMap.set(a.id, { id: a.id, name: a.name ?? "", image_url: null });
           }
           const key = `${tr.id}:${a.id}`;
           if (!trackArtistSet.has(key)) {
@@ -168,6 +168,25 @@ export async function POST(req: Request) {
         const key = `${userId}:${tr.id}:${playedAtIso}`;
         if (!listenMap.has(key)) {
           listenMap.set(key, { user_id: userId, track_id: tr.id, played_at: playedAtIso });
+        }
+      }
+    }
+
+    const artistIds = Array.from(artistMap.keys());
+    if (artistIds.length) {
+      for (let i = 0; i < artistIds.length; i += 50) {
+        const slice = artistIds.slice(i, i + 50);
+        const url = `https://api.spotify.com/v1/artists?ids=${slice.join(",")}`;
+        const resp = await fetch(url, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        if (resp.ok) {
+          const j = await resp.json();
+          j.artists?.forEach((ar: any) => {
+            const img = ar?.images?.[0]?.url || null;
+            const existing = artistMap.get(ar.id);
+            if (existing) existing.image_url = img;
+          });
         }
       }
     }
