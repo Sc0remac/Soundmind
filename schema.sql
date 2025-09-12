@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict hhRr0dRV2vKU8vb3TFYfKL2f8HTXscHcMgEZHRo1zzuIzQcskLvZbrV8pdTN7xa
+\restrict z3wqQjetcionOMnJ7UGjiRFXXVff04bDqHe10sZSfc0Bo6wAPraQ1DWVDPB26Tt
 
 -- Dumped from database version 17.4
 -- Dumped by pg_dump version 17.6 (Homebrew)
@@ -24,6 +24,20 @@ SET row_security = off;
 --
 
 CREATE SCHEMA auth;
+
+
+--
+-- Name: pg_cron; Type: EXTENSION; Schema: -; Owner: -
+--
+
+CREATE EXTENSION IF NOT EXISTS pg_cron WITH SCHEMA pg_catalog;
+
+
+--
+-- Name: EXTENSION pg_cron; Type: COMMENT; Schema: -; Owner: -
+--
+
+COMMENT ON EXTENSION pg_cron IS 'Job scheduler for PostgreSQL';
 
 
 --
@@ -479,7 +493,8 @@ CREATE TABLE public.moods (
     CONSTRAINT moods_sleep_quality_check CHECK (((sleep_quality >= 0) AND (sleep_quality <= 10))),
     CONSTRAINT moods_soreness_check CHECK (((soreness >= 0) AND (soreness <= 10))),
     CONSTRAINT moods_stress_check CHECK (((stress >= 0) AND (stress <= 10)))
-);
+)
+WITH (autovacuum_vacuum_scale_factor='0.05', autovacuum_analyze_scale_factor='0.02');
 
 
 --
@@ -522,6 +537,20 @@ begin
   refresh materialized view public.mv_sessions_music_pre;
   refresh materialized view public.mv_sessions_music_post;
 end$$;
+
+
+--
+-- Name: refresh_music_rollups(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.refresh_music_rollups() RETURNS void
+    LANGUAGE plpgsql SECURITY DEFINER
+    AS $$
+BEGIN
+  REFRESH MATERIALIZED VIEW CONCURRENTLY public.mv_user_artist_counts_daily;
+  REFRESH MATERIALIZED VIEW CONCURRENTLY public.mv_user_genre_counts_daily;
+END;
+$$;
 
 
 --
@@ -2436,6 +2465,46 @@ CREATE MATERIALIZED VIEW public.mv_sessions_performance AS
 
 
 --
+-- Name: mv_sessions_mood_delta; Type: VIEW; Schema: public; Owner: -
+--
+
+CREATE VIEW public.mv_sessions_mood_delta WITH (security_invoker='true') AS
+ SELECT perf.workout_id,
+    perf.user_id,
+    perf.started_at,
+    pre.mood_pre_score,
+    post.mood_post_score,
+    (post.mood_post_score - pre.mood_pre_score) AS mood_delta
+   FROM ((public.mv_sessions_performance perf
+     LEFT JOIN LATERAL ( SELECT m.score AS mood_pre_score
+           FROM public.moods m
+          WHERE ((m.user_id = perf.user_id) AND (m.created_at <= perf.started_at))
+          ORDER BY m.created_at DESC
+         LIMIT 1) pre ON (true))
+     LEFT JOIN LATERAL ( SELECT x.score AS mood_post_score
+           FROM ( SELECT m1.score,
+                    m1.created_at,
+                    1 AS prio
+                   FROM public.moods m1
+                  WHERE ((m1.user_id = perf.user_id) AND (m1.created_at >= perf.started_at) AND COALESCE(m1.post_workout, false))
+                UNION ALL
+                 SELECT m2.score,
+                    m2.created_at,
+                    2 AS prio
+                   FROM public.moods m2
+                  WHERE ((m2.user_id = perf.user_id) AND (m2.created_at >= (perf.started_at + '02:00:00'::interval)))) x
+          ORDER BY x.prio, x.created_at
+         LIMIT 1) post ON (true));
+
+
+--
+-- Name: VIEW mv_sessions_mood_delta; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON VIEW public.mv_sessions_mood_delta IS 'Per-workout mood deltas using started_at anchor. Prefers explicit post_workout moods; else first mood at/after start+2h.';
+
+
+--
 -- Name: spotify_listens; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2447,7 +2516,8 @@ CREATE TABLE public.spotify_listens (
     context_uri text,
     source text,
     created_at timestamp with time zone DEFAULT now()
-);
+)
+WITH (autovacuum_vacuum_scale_factor='0.02', autovacuum_analyze_scale_factor='0.01', autovacuum_vacuum_threshold='5000', autovacuum_analyze_threshold='2000');
 
 
 --
@@ -2527,17 +2597,57 @@ CREATE MATERIALIZED VIEW public.mv_sessions_music_pre AS
  SELECT p.workout_id,
     p.user_id,
     p.started_at,
-    count(v.id) AS listens_count,
-    avg(v.bpm) AS avg_bpm,
-    avg(v.energy) AS avg_energy,
-    avg(v.valence) AS avg_valence,
-    public.most_common_text(array_remove(array_agg(v.genre_primary), NULL::text)) AS top_genre,
-    public.most_common_text(array_remove(array_agg(gt.tag), NULL::text)) AS top_tag,
-    public.most_common_text(array_remove(array_agg(v.artist_name), NULL::text)) AS top_artist
-   FROM ((public.mv_sessions_performance p
-     LEFT JOIN public.v_spotify_listens_expanded v ON (((v.user_id = p.user_id) AND (v.played_at >= (p.started_at - '01:00:00'::interval)) AND (v.played_at < p.started_at))))
-     LEFT JOIN LATERAL unnest(COALESCE(v.genre_tags, '{}'::text[])) gt(tag) ON (true))
+    count(l.id) AS listens_count,
+    avg(t.bpm) AS avg_bpm,
+    avg(t.energy) AS avg_energy,
+    avg(t.valence) AS avg_valence,
+    public.most_common_text(array_remove(array_agg(t.genre_primary), NULL::text)) AS top_genre,
+    public.most_common_text(array_remove(array_agg(gt.tag), NULL::text)) AS top_tag
+   FROM (((public.mv_sessions_performance p
+     LEFT JOIN public.spotify_listens l ON (((l.user_id = p.user_id) AND (l.played_at >= (p.started_at - '01:00:00'::interval)) AND (l.played_at < p.started_at))))
+     LEFT JOIN public.spotify_tracks t ON ((t.id = l.track_id)))
+     LEFT JOIN LATERAL unnest(COALESCE(t.genre_tags, '{}'::text[])) gt(tag) ON (true))
   GROUP BY p.workout_id, p.user_id, p.started_at
+  WITH NO DATA;
+
+
+--
+-- Name: spotify_track_artists; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.spotify_track_artists (
+    track_id text NOT NULL,
+    artist_id text NOT NULL
+);
+
+
+--
+-- Name: mv_user_artist_counts_daily; Type: MATERIALIZED VIEW; Schema: public; Owner: -
+--
+
+CREATE MATERIALIZED VIEW public.mv_user_artist_counts_daily AS
+ SELECT l.user_id,
+    (date_trunc('day'::text, l.played_at))::date AS day,
+    ta.artist_id,
+    count(*) AS listens
+   FROM (public.spotify_listens l
+     JOIN public.spotify_track_artists ta ON ((ta.track_id = l.track_id)))
+  GROUP BY l.user_id, ((date_trunc('day'::text, l.played_at))::date), ta.artist_id
+  WITH NO DATA;
+
+
+--
+-- Name: mv_user_genre_counts_daily; Type: MATERIALIZED VIEW; Schema: public; Owner: -
+--
+
+CREATE MATERIALIZED VIEW public.mv_user_genre_counts_daily AS
+ SELECT l.user_id,
+    (date_trunc('day'::text, l.played_at))::date AS day,
+    COALESCE(NULLIF(t.genre_primary, ''::text), t.genre_tags[1]) AS genre,
+    count(*) AS listens
+   FROM (public.spotify_listens l
+     JOIN public.spotify_tracks t ON ((t.id = l.track_id)))
+  GROUP BY l.user_id, ((date_trunc('day'::text, l.played_at))::date), COALESCE(NULLIF(t.genre_primary, ''::text), t.genre_tags[1])
   WITH NO DATA;
 
 
@@ -2622,17 +2732,8 @@ CREATE TABLE public.spotify_artists (
     popularity integer,
     images jsonb,
     created_at timestamp with time zone DEFAULT now(),
-    updated_at timestamp with time zone DEFAULT now()
-);
-
-
---
--- Name: spotify_track_artists; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.spotify_track_artists (
-    track_id text NOT NULL,
-    artist_id text NOT NULL
+    updated_at timestamp with time zone DEFAULT now(),
+    image_url text
 );
 
 
@@ -2694,7 +2795,6 @@ CREATE VIEW public.v_correlations_ready AS
     pre.avg_valence AS pre_valence,
     public.bpm_band(pre.avg_bpm) AS pre_bpm_band,
     pre.top_genre AS pre_top_genre,
-    pre.top_artist AS pre_top_artist,
     post.avg_bpm AS post_bpm,
     post.avg_energy AS post_energy,
     post.avg_valence AS post_valence,
@@ -2736,6 +2836,76 @@ CREATE VIEW public.v_spotify_listens_expanded WITH (security_invoker='true') AS
            FROM (public.spotify_track_artists ta
              JOIN public.spotify_artists a ON ((a.id = ta.artist_id)))
           WHERE (ta.track_id = l.track_id)) art ON (true));
+
+
+--
+-- Name: v_recent_listens_compact; Type: VIEW; Schema: public; Owner: -
+--
+
+CREATE VIEW public.v_recent_listens_compact WITH (security_invoker='true') AS
+ SELECT id,
+    user_id,
+    played_at,
+    track_id,
+    track_name,
+    artist_name,
+    album_image_url,
+    bpm,
+    energy,
+    valence,
+    genre,
+    preview_url
+   FROM public.v_spotify_listens_expanded
+  WHERE (user_id = auth.uid());
+
+
+--
+-- Name: VIEW v_recent_listens_compact; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON VIEW public.v_recent_listens_compact IS 'Per-user recent listens (auth.uid()), used by Music page.';
+
+
+--
+-- Name: v_user_top_artists; Type: VIEW; Schema: public; Owner: -
+--
+
+CREATE VIEW public.v_user_top_artists WITH (security_invoker='true') AS
+ SELECT s.user_id,
+    s.artist_id,
+    a.name,
+    COALESCE(NULLIF(a.image_url, ''::text), ((a.images -> 0) ->> 'url'::text), ( SELECT t.album_image_url
+           FROM ((public.spotify_listens l
+             JOIN public.spotify_track_artists ta ON ((ta.track_id = l.track_id)))
+             JOIN public.spotify_tracks t ON ((t.id = l.track_id)))
+          WHERE ((l.user_id = s.user_id) AND (ta.artist_id = s.artist_id) AND (t.album_image_url IS NOT NULL))
+          ORDER BY l.played_at DESC
+         LIMIT 1)) AS image_url,
+    sum(s.listens) AS listens
+   FROM (public.mv_user_artist_counts_daily s
+     JOIN public.spotify_artists a ON ((a.id = s.artist_id)))
+  WHERE (s.user_id = auth.uid())
+  GROUP BY s.user_id, s.artist_id, a.name, a.image_url, a.images;
+
+
+--
+-- Name: VIEW v_user_top_artists; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON VIEW public.v_user_top_artists IS 'Per-user top artists with resilient image_url (artist.image_url, then images[0], then latest album artwork for that user/artist).';
+
+
+--
+-- Name: v_user_top_genres; Type: VIEW; Schema: public; Owner: -
+--
+
+CREATE VIEW public.v_user_top_genres WITH (security_invoker='true') AS
+ SELECT user_id,
+    genre,
+    sum(listens) AS listens
+   FROM public.mv_user_genre_counts_daily s
+  WHERE (user_id = auth.uid())
+  GROUP BY user_id, genre;
 
 
 --
@@ -3214,14 +3384,6 @@ ALTER TABLE ONLY public.spotify_listens
 
 
 --
--- Name: spotify_listens spotify_listens_user_track_played_unique; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.spotify_listens
-    ADD CONSTRAINT spotify_listens_user_track_played_unique UNIQUE (user_id, track_id, played_at);
-
-
---
 -- Name: spotify_track_artists spotify_track_artists_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -3691,6 +3853,13 @@ CREATE INDEX users_is_anonymous_idx ON auth.users USING btree (is_anonymous);
 
 
 --
+-- Name: idx_artists_lower_name; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_artists_lower_name ON public.spotify_artists USING btree (lower(name));
+
+
+--
 -- Name: idx_ex_body_parts_bp; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -3715,7 +3884,21 @@ CREATE INDEX idx_listens_track ON public.spotify_listens USING btree (track_id);
 -- Name: idx_listens_user_time; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_listens_user_time ON public.spotify_listens USING btree (user_id, played_at DESC);
+CREATE INDEX idx_listens_user_time ON public.spotify_listens USING btree (user_id, played_at DESC) INCLUDE (track_id);
+
+
+--
+-- Name: idx_moods_user_created; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_moods_user_created ON public.moods USING btree (user_id, created_at);
+
+
+--
+-- Name: idx_moods_user_postworkout_created; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_moods_user_postworkout_created ON public.moods USING btree (user_id, post_workout, created_at);
 
 
 --
@@ -3747,38 +3930,38 @@ CREATE INDEX idx_mv_perf_user_time ON public.mv_sessions_performance USING btree
 
 
 --
--- Name: idx_sp_listens_user_played; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_mv_uac_user_artist_day; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_sp_listens_user_played ON public.spotify_listens USING btree (user_id, played_at DESC);
-
-
---
--- Name: idx_sp_listens_user_time; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_sp_listens_user_time ON public.spotify_listens USING btree (user_id, played_at DESC);
+CREATE INDEX idx_mv_uac_user_artist_day ON public.mv_user_artist_counts_daily USING btree (user_id, artist_id, day);
 
 
 --
--- Name: idx_sp_tracks_isrc; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_mv_uac_user_day; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_sp_tracks_isrc ON public.spotify_tracks USING btree (isrc);
-
-
---
--- Name: idx_spotify_accounts_user; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_spotify_accounts_user ON public.spotify_accounts USING btree (user_id);
+CREATE INDEX idx_mv_uac_user_day ON public.mv_user_artist_counts_daily USING btree (user_id, day);
 
 
 --
--- Name: idx_spotify_listens_user_time; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_mv_ugc_user_day; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_spotify_listens_user_time ON public.spotify_listens USING btree (user_id, played_at DESC);
+CREATE INDEX idx_mv_ugc_user_day ON public.mv_user_genre_counts_daily USING btree (user_id, day);
+
+
+--
+-- Name: idx_mv_ugc_user_genre_day; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_mv_ugc_user_genre_day ON public.mv_user_genre_counts_daily USING btree (user_id, genre, day);
+
+
+--
+-- Name: idx_spotify_listens_user_played_desc; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_spotify_listens_user_played_desc ON public.spotify_listens USING btree (user_id, played_at DESC);
 
 
 --
@@ -3807,6 +3990,13 @@ CREATE INDEX idx_spotify_tracks_genre_tags ON public.spotify_tracks USING gin (g
 --
 
 CREATE INDEX idx_spotify_tracks_isrc ON public.spotify_tracks USING btree (isrc);
+
+
+--
+-- Name: idx_track_artists_artist; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_track_artists_artist ON public.spotify_track_artists USING btree (artist_id, track_id);
 
 
 --
@@ -3852,6 +4042,20 @@ CREATE INDEX idx_ws_exercise ON public.workout_sets USING btree (exercise_id);
 
 
 --
+-- Name: uq_mv_uac_user_day_artist; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_mv_uac_user_day_artist ON public.mv_user_artist_counts_daily USING btree (user_id, day, artist_id);
+
+
+--
+-- Name: uq_mv_ugc_user_day_genre; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_mv_ugc_user_day_genre ON public.mv_user_genre_counts_daily USING btree (user_id, day, genre);
+
+
+--
 -- Name: ux_body_parts_name_scope; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -3863,20 +4067,6 @@ CREATE UNIQUE INDEX ux_body_parts_name_scope ON public.body_parts USING btree (l
 --
 
 CREATE UNIQUE INDEX ux_body_parts_name_user ON public.body_parts USING btree (lower(name), user_id) WHERE (is_global = false);
-
-
---
--- Name: ux_spotify_listens_user_track_time; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE UNIQUE INDEX ux_spotify_listens_user_track_time ON public.spotify_listens USING btree (user_id, track_id, played_at);
-
-
---
--- Name: ux_spotify_tracks_id; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE UNIQUE INDEX ux_spotify_tracks_id ON public.spotify_tracks USING btree (id);
 
 
 --
@@ -5192,5 +5382,5 @@ CREATE EVENT TRIGGER pgrst_drop_watch ON sql_drop
 -- PostgreSQL database dump complete
 --
 
-\unrestrict hhRr0dRV2vKU8vb3TFYfKL2f8HTXscHcMgEZHRo1zzuIzQcskLvZbrV8pdTN7xa
+\unrestrict z3wqQjetcionOMnJ7UGjiRFXXVff04bDqHe10sZSfc0Bo6wAPraQ1DWVDPB26Tt
 
