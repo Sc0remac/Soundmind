@@ -22,11 +22,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <NavBar />
 
           <div className="mx-auto max-w-6xl px-4 py-4">
-<<<<<<< ours
-            <NavBar />
-
-=======
->>>>>>> theirs
             {children}
           </div>
         </Providers>
