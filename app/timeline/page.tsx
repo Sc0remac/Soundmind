@@ -437,9 +437,16 @@ export default function TimelinePage() {
             )}
           </div>
         </div>
+      ) : uiDays.reduce((n, d) => n + d.rows.length, 0) === 0 ? (
+        <div className="rounded-xl border border-white/10 bg-white/5 p-6 text-sm text-white/80">
+          <div className="mb-1 text-base font-medium">No entries match your filters</div>
+          <div className="text-xs text-white/60">Try clearing search or toggling types/date.</div>
+        </div>
       ) : (
         <div className="rounded-xl border border-white/10 bg-white/5">
           <GroupedVirtuoso
+            useWindowScroll
+            increaseViewportBy={{ top: 300, bottom: 600 }}
             groupCounts={groupCounts}
             groupContent={(index) => {
               const d = uiDays[index];
