@@ -35,6 +35,7 @@ type Listen = {
   genre?: string | null;
   genre_tags?: string[] | null;
   album_image_url?: string | null;
+  bpm?: number | null;
 };
 
 type Artist = {
@@ -349,6 +350,11 @@ export default function MusicPage() {
                       <span className="text-white/60"> — {r.artist_name ?? "Unknown"}</span>
                     </div>
                     <div className="mt-1 flex flex-wrap items-center gap-1 text-xs">
+                      {typeof r.bpm === "number" && r.bpm > 0 && (
+                        <Chip size="sm" variant="flat" className="bg-white/10">
+                          {Math.round(r.bpm)} BPM
+                        </Chip>
+                      )}
                       {r.genre && (
                         <>
                           <span className="text-white/60">Genre:</span>

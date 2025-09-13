@@ -1,6 +1,6 @@
 // app/api/enrich/lastfm/route.ts
+// Proxies to Supabase Edge Function `enrich-lastfm-tags`.
 import { NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
 /**
  * LAST.FM ENRICHMENT
@@ -200,94 +200,12 @@ type LinkRow = { track_id: string; artist_id: string };
 type ArtistRow = { id: string; name: string };
 
 export async function POST() {
-  if (!LASTFM_KEY) {
-    return NextResponse.json(
-      { ok: false, error: "Missing LASTFM_API_KEY" },
-      { status: 500 }
-    );
+  try {
+    const fn = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/enrich-lastfm-tags`;
+    const r = await fetch(fn, { method: "POST" });
+    const txt = await r.text();
+    return new NextResponse(txt, { status: r.status, headers: { "Content-Type": r.headers.get("content-type") || "application/json" } });
+  } catch (e: any) {
+    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
   }
-
-  // 1) Find up to 100 tracks that lack genre metadata
-  const { data: tracks, error: tErr } = await supabaseAdmin
-    .from("spotify_tracks")
-    .select("id,name,genre_primary,genre_tags,artist_name")
-    .or("genre_primary.is.null,genre_tags.is.null")
-    .limit(100);
-  if (tErr) return NextResponse.json({ ok: false, error: tErr.message }, { status: 500 });
-  const trackRows = tracks as TrackRow[] | null;
-  if (!trackRows?.length)
-    return NextResponse.json({ ok: true, updated: 0, processed: 0, note: "No tracks need tags" });
-
-  const ids = trackRows.map((t) => t.id);
-
-  // 2) Fetch track-artist links and artist names
-  const [{ data: links }, { data: artists }] = await Promise.all([
-    supabaseAdmin.from("spotify_track_artists").select("track_id,artist_id").in("track_id", ids),
-    supabaseAdmin.from("spotify_artists").select("id,name"),
-  ] as const);
-
-  const artistMap = new Map<string, string>();
-  (artists as ArtistRow[] | null | undefined)?.forEach((a) => artistMap.set(a.id, a.name));
-
-  const trackArtists = new Map<string, string[]>();
-  (links as LinkRow[] | null | undefined)?.forEach((lnk) => {
-    const arr = trackArtists.get(lnk.track_id) || [];
-    const nm = artistMap.get(lnk.artist_id);
-    if (nm) arr.push(nm);
-    trackArtists.set(lnk.track_id, arr);
-  });
-
-  // 3) For each track, call last.fm and update the row
-  let updated = 0;
-  const results: any[] = [];
-
-  for (const tr of trackRows) {
-    let artistsForTrack = trackArtists.get(tr.id) || [];
-    if ((!artistsForTrack || artistsForTrack.length === 0) && tr.artist_name) {
-      artistsForTrack = String(tr.artist_name)
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean);
-    }
-    const artist = artistsForTrack[0] || ""; // pick the first (primary) artist
-    if (!artist || !tr.name) continue;
-
-    const tags = await fetchTagsFor(artist, tr.name);
-    const { ordered, top } = scoreTags(tags);
-    const { energy, valence } = deriveEnergyValence(ordered);
-
-    const genre_primary = top || tr.genre_primary || null;
-    const genre_tags = ordered.slice(0, 8);
-
-    const { error: uErr } = await supabaseAdmin
-      .from("spotify_tracks")
-      .update({
-        genre_primary,
-        genre_tags: genre_tags.length ? genre_tags : null,
-        derived_energy: energy,
-        derived_valence: valence,
-        last_enriched_at: new Date().toISOString(),
-        meta_provider: {
-          ...(typeof (tr as any).meta_provider === "object" ? (tr as any).meta_provider : {}),
-          lastfm: { ok: true, tagsFetched: tags.length, artist, track: tr.name },
-        },
-      })
-      .eq("id", tr.id);
-
-    results.push({
-      id: tr.id,
-      track: tr.name,
-      artist,
-      topTag: genre_primary,
-      tagCount: tags.length,
-      updated: !uErr,
-      error: uErr?.message || null,
-    });
-
-    if (!uErr) updated++;
-    // Small delay to be polite to Last.fm
-    await new Promise((r) => setTimeout(r, 120));
-  }
-
-  return NextResponse.json({ ok: true, updated, processed: tracks?.length || 0, results });
 }

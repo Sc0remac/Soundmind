@@ -2,6 +2,7 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { usePathname } from "next/navigation";
 import {
   Navbar,
@@ -33,7 +34,14 @@ export default function BrandNav() {
     <Navbar maxWidth="xl" isBordered className="mb-6 rounded-xl2 shadow-card">
       <NavbarBrand>
         <Link href="/" className="flex items-center gap-2">
-          <div className="h-8 w-8 rounded-xl bg-brand-500" />
+          <Image
+            src="/brand/logo-final.png"
+            alt="Soundmind"
+            width={28}
+            height={28}
+            className="rounded-lg"
+            priority
+          />
           <span className="font-semibold tracking-tight">Soundmind</span>
         </Link>
       </NavbarBrand>
@@ -65,4 +73,4 @@ export default function BrandNav() {
       </NavbarContent>
     </Navbar>
   );
-}
+}   
