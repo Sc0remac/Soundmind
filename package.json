@@ -14,7 +14,8 @@
     "seed:dummy": "ts-node --compiler-options '{\"module\":\"CommonJS\"}' scripts/seedDummyData.ts",
     "seed:history": "ts-node --compiler-options '{\"module\":\"CommonJS\"}' scripts/seedHistoricalData.ts",
     "db:repl": "node scripts/supabase-repl.mjs",
-    "db:run": "node scripts/supabase-run.mjs"
+    "db:run": "node scripts/supabase-run.mjs",
+    "backfill:reccobeats": "ts-node --compiler-options '{\"module\":\"CommonJS\"}' scripts/backfillAudioFeaturesReccobeats.ts"
   },
   "dependencies": {
     "@nextui-org/react": "^2.6.11",
