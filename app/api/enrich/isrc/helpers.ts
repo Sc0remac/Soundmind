@@ -1,6 +1,6 @@
 export function buildTrackArtistMaps(tracks: any[]) {
   const trackMap = new Map<string, any>();
-  const artistMap = new Map<string, { id: string; name: string; image_url: string | null }>();
+  const artistMap = new Map<string, { id: string; name: string; image_url: string | null; images?: any }>();
   const linkSet = new Set<string>();
   const linkRows: { track_id: string; artist_id: string }[] = [];
 
@@ -42,13 +42,16 @@ export function buildTrackArtistMaps(tracks: any[]) {
 }
 
 export function mergeArtistImages(
-  artistMap: Map<string, { id: string; name: string; image_url: string | null }>,
+  artistMap: Map<string, { id: string; name: string; image_url: string | null; images?: any }>,
   artists: Array<{ id: string; images?: Array<{ url: string }> }>
 ) {
   artists?.forEach((ar) => {
     const img = ar?.images?.[0]?.url || null;
     const existing = artistMap.get(ar.id);
-    if (existing) existing.image_url = img;
+    if (existing) {
+      existing.image_url = img;
+      if (ar?.images) existing.images = ar.images;
+    }
   });
   return artistMap;
 }

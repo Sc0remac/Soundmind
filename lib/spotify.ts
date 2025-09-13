@@ -99,3 +99,23 @@ export async function fetchRecentlyPlayed(access_token: string, afterMs?: number
   if (!r.ok) throw new Error(`recently-played ${r.status}`);
   return r.json() as Promise<{ items: any[] }>;
 }
+
+// Fetch artist objects by IDs (max 50 per request)
+export async function fetchSpotifyArtists(access_token: string, ids: string[]) {
+  if (!ids?.length) return { artists: [] as any[] };
+  if (ids.length > 50) {
+    // Callers should chunk; provide a helpful error for misuse
+    throw new Error(`fetchSpotifyArtists called with ${ids.length} ids (max 50)`);
+  }
+  const url = new URL("https://api.spotify.com/v1/artists");
+  url.searchParams.set("ids", ids.join(","));
+  const r = await fetch(url.toString(), {
+    headers: { Authorization: `Bearer ${access_token}` },
+    next: { revalidate: 0 },
+  });
+  if (!r.ok) {
+    const txt = await r.text();
+    throw new Error(`artists ${r.status}: ${txt}`);
+  }
+  return r.json() as Promise<{ artists: any[] }>;
+}

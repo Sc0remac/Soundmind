@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { supabaseAdmin, usingServiceRole } from "@/lib/supabaseAdmin";
 import { requireUserFromRequest } from "@/lib/auth";
 import { buildTrackArtistMaps, mergeArtistImages } from "./helpers";
+import { fetchSpotifyArtists } from "@/lib/spotify";
 
 const SPOTIFY_CLIENT_ID = process.env.SPOTIFY_CLIENT_ID!;
 const SPOTIFY_CLIENT_SECRET = process.env.SPOTIFY_CLIENT_SECRET!;
@@ -84,20 +85,19 @@ async function fetchTracksBatch(token: string, ids: string[]) {
   }>;
 }
 
+// Fetch artists in chunks of 50 to satisfy Spotify limits
 async function fetchArtistsBatch(token: string, ids: string[]) {
-  const url = new URL("https://api.spotify.com/v1/artists");
-  url.searchParams.set("ids", ids.join(","));
-  const r = await fetch(url.toString(), {
-  headers: { Authorization: `Bearer ${token}` },
-    next: { revalidate: 0 },
-  });
-  if (!r.ok) {
-    const txt = await r.text();
-    throw new Error(`Spotify /v1/artists ${r.status}: ${txt}`);
+  const out: { artists: Array<{ id: string; images?: Array<{ url: string }> }> } = {
+    artists: [],
+  };
+  for (let i = 0; i < ids.length; i += 50) {
+    const slice = ids.slice(i, i + 50);
+    const j = await fetchSpotifyArtists(token, slice);
+    out.artists.push(...(j?.artists || []));
+    // small delay to be polite
+    if (i + 50 < ids.length) await new Promise((r) => setTimeout(r, 60));
   }
-  return r.json() as Promise<{
-    artists: Array<{ id: string; images?: Array<{ url: string }> }>;
-  }>;
+  return out;
 }
 
 export async function POST(req: Request) {

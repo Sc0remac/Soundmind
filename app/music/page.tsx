@@ -289,7 +289,15 @@ export default function MusicPage() {
                 className="flex items-center justify-between rounded-xl border border-white/10 bg-white/5 px-3 py-2"
               >
                 <div className="flex items-center gap-2">
-                  <Avatar src={a.image_url ?? undefined} name={a.name} className="w-8 h-8" />
+                  {a.image_url ? (
+                    <img
+                      src={a.image_url}
+                      alt=""
+                      className="h-8 w-8 shrink-0 rounded-full object-cover ring-1 ring-white/20"
+                    />
+                  ) : (
+                    <Avatar name={a.name} className="w-8 h-8" />
+                  )}
                   <span className="text-sm">{a.name}</span>
                 </div>
                 <span className="text-xs text-white/60">{a.play_count ?? "—"} plays</span>
