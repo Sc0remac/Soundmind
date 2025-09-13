@@ -34,11 +34,12 @@ export async function POST(req: Request) {
     return { status, json };
   }
 
-  const [isrc, deezer, lastfm] = await Promise.all([
+  const [isrc, deezer, lastfm, reccobeats] = await Promise.all([
     call("/api/enrich/isrc", true),   // needs bearer
     call("/api/enrich/deezer"),       // no bearer needed
     call("/api/enrich/lastfm"),       // no bearer needed
+    call("/api/enrich/reccobeats"),   // no bearer needed
   ]);
 
-  return NextResponse.json({ ok: true, isrc, deezer, lastfm });
+  return NextResponse.json({ ok: true, isrc, deezer, lastfm, reccobeats });
 }
