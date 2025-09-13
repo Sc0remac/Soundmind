@@ -1,113 +1,138 @@
 // app/api/spotify/my/sync/route.ts
 import { NextResponse } from "next/server";
-import { headers } from "next/headers";
-import { createClient } from "@supabase/supabase-js";
-import { supabaseAdmin } from "@/lib/supabaseAdmin";
-
-function getBearer() {
-  const h = headers();
-  const a = h.get("authorization") || h.get("Authorization") || "";
-  const m = a.match(/^Bearer\s+(.+)$/i);
-  return m ? m[1] : null;
-}
+import { supabaseAdmin, usingServiceRole } from "@/lib/supabaseAdmin";
+import { requireUserFromRequest } from "@/lib/auth";
+import { refreshToken as spotifyRefresh } from "@/lib/spotify";
 
 export async function POST(req: Request) {
   try {
+    if (!usingServiceRole) {
+      return NextResponse.json(
+        { error: "Service role key missing; cannot sync." },
+        { status: 500 }
+      );
+    }
+
     const url = new URL(req.url);
     const full = url.searchParams.get("full") === "1";
 
-    // 1) Identify the user with a user-scoped client
-    const bearer = getBearer();
-    if (!bearer) return NextResponse.json({ error: "Missing bearer" }, { status: 401 });
-
-    const userClient = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      { global: { headers: { Authorization: `Bearer ${bearer}` } }, auth: { persistSession: false } }
-    );
-    const { data: u, error: uErr } = await userClient.auth.getUser();
-    if (uErr || !u?.user) return NextResponse.json({ error: uErr?.message || "No user" }, { status: 401 });
-    const userId = u.user.id;
+    // 1) Identify the user
+    const user = await requireUserFromRequest(req);
+    const userId = user.id;
 
     // 2) Read tokens with ADMIN client (bypass RLS)
     const { data: acct, error: acctErr } = await supabaseAdmin
       .from("spotify_accounts")
-      .select("access_token, refresh_token, expires_at")
+      .select("access_token, refresh_token, expires_at, last_after_cursor_ms")
       .eq("user_id", userId)
       .maybeSingle();
 
-    if (acctErr || !acct) {
-      return NextResponse.json({ error: acctErr?.message || "No Spotify account" }, { status: 400 });
+    if (acctErr) return NextResponse.json({ error: acctErr.message }, { status: 500 });
+    if (!acct) return NextResponse.json({ error: "No Spotify account" }, { status: 409 });
+
+    let accessToken = acct.access_token as string | null;
+    let refreshToken = (acct.refresh_token as string | null) || null;
+    // expires_at may be ISO/date or epoch seconds; normalize to ms
+    let expMs = 0;
+    if (acct.expires_at != null) {
+      if (typeof acct.expires_at === "number") expMs = Number(acct.expires_at) * 1000;
+      else expMs = new Date(acct.expires_at as any).getTime();
     }
 
-    let accessToken = acct.access_token as string;
-    const refreshToken = acct.refresh_token as string;
-    const exp = acct.expires_at ? new Date(acct.expires_at).getTime() : 0;
-
-    // 3) Refresh if expiring
-    if (!accessToken || exp - Date.now() < 60_000) {
-      const base = process.env.APP_BASE_URL || "http://127.0.0.1:3000";
-      const redirect = process.env.SPOTIFY_REDIRECT_URI || `${base}/api/spotify/callback`;
-
-      const resp = await fetch("https://accounts.spotify.com/api/token", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-          Authorization:
-            "Basic " +
-            Buffer.from(
-              `${process.env.SPOTIFY_CLIENT_ID}:${process.env.SPOTIFY_CLIENT_SECRET}`
-            ).toString("base64"),
-        },
-        body: new URLSearchParams({
-          grant_type: "refresh_token",
-          refresh_token: refreshToken,
-          redirect_uri: redirect,
-        }),
-      });
-
-      if (!resp.ok) {
-        const text = await resp.text();
-        return NextResponse.json({ error: "Refresh failed", text }, { status: 400 });
+    // 3) Ensure we have a fresh access token
+    const needsRefresh = !accessToken || !expMs || expMs - Date.now() < 60_000;
+    if (needsRefresh) {
+      if (!refreshToken) {
+        return NextResponse.json(
+          { error: "Missing Spotify refresh token. Please reconnect." },
+          { status: 401 }
+        );
       }
-      const t = await resp.json();
-      accessToken = t.access_token;
-      const newExp = new Date(Date.now() + Math.max(0, (t.expires_in ?? 3600) - 60) * 1000);
-
-      await supabaseAdmin
-        .from("spotify_accounts")
-        .update({
-          access_token: accessToken,
-          refresh_token: t.refresh_token ?? refreshToken,
-          expires_at: newExp.toISOString(),
-        })
-        .eq("user_id", userId);
+      try {
+        const t = await spotifyRefresh(refreshToken);
+        accessToken = t.access_token;
+        if (t.refresh_token) refreshToken = t.refresh_token;
+        const newExpSec = Math.floor(Date.now() / 1000) + Number(t.expires_in || 3600) - 60;
+        await supabaseAdmin
+          .from("spotify_accounts")
+          .update({ access_token: accessToken, refresh_token: refreshToken, expires_at: newExpSec })
+          .eq("user_id", userId);
+        expMs = newExpSec * 1000;
+      } catch (e: any) {
+        return NextResponse.json({ error: String(e) }, { status: 401 });
+      }
     }
 
     // 4) Windowing
-    let afterParam = "";
+    // 4) Determine cursor for incremental sync
+    let afterMs: number | null = null;
     if (!full) {
-      const { data: last } = await supabaseAdmin
-        .from("spotify_listens")
-        .select("played_at")
-        .eq("user_id", userId)
-        .order("played_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      if (last?.played_at) afterParam = `&after=${new Date(last.played_at).getTime() + 1}`;
+      if (acct.last_after_cursor_ms != null) {
+        afterMs = Number(acct.last_after_cursor_ms) || null;
+      } else {
+        const { data: last } = await supabaseAdmin
+          .from("spotify_listens")
+          .select("played_at")
+          .eq("user_id", userId)
+          .order("played_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (last?.played_at) afterMs = new Date(last.played_at).getTime() + 1;
+      }
     }
 
-    // 5) Fetch recently played
-    const apiUrl = `https://api.spotify.com/v1/me/player/recently-played?limit=50${afterParam}`;
-    const spRes = await fetch(apiUrl, { headers: { Authorization: `Bearer ${accessToken}` } });
-    if (!spRes.ok) {
-      const text = await spRes.text();
-      return NextResponse.json({ error: "Spotify API error", status: spRes.status, text }, { status: 400 });
+    // 5) Fetch recently played in small pages until no more or safety cap
+    const maxPages = 5;
+    let page = 0;
+    let totalItems = 0;
+    let lastCursor: number | null = afterMs;
+    const allItems: any[] = [];
+    while (page < maxPages) {
+      const apiUrl = new URL("https://api.spotify.com/v1/me/player/recently-played");
+      apiUrl.searchParams.set("limit", "50");
+      if (lastCursor) apiUrl.searchParams.set("after", String(lastCursor));
+
+      let spRes = await fetch(apiUrl.toString(), { headers: { Authorization: `Bearer ${accessToken}` } });
+      if (spRes.status === 401) {
+        // Try a one-time forced refresh
+        if (!refreshToken) return NextResponse.json({ error: "Spotify expired; reconnect" }, { status: 401 });
+        try {
+          const t = await spotifyRefresh(refreshToken);
+          accessToken = t.access_token;
+          const newExpSec = Math.floor(Date.now() / 1000) + Number(t.expires_in || 3600) - 60;
+          await supabaseAdmin
+            .from("spotify_accounts")
+            .update({ access_token: accessToken, expires_at: newExpSec })
+            .eq("user_id", userId);
+          spRes = await fetch(apiUrl.toString(), { headers: { Authorization: `Bearer ${accessToken}` } });
+        } catch (e: any) {
+          return NextResponse.json({ error: String(e) }, { status: 401 });
+        }
+      }
+
+      if (!spRes.ok) {
+        const text = await spRes.text();
+        return NextResponse.json({ error: "Spotify API error", status: spRes.status, text }, { status: 502 });
+      }
+      const payload = await spRes.json();
+      const items = Array.isArray(payload.items) ? payload.items : [];
+      if (!items.length) break;
+      allItems.push(...items);
+      totalItems += items.length;
+      const lastPlayed = items[items.length - 1]?.played_at;
+      lastCursor = lastPlayed ? new Date(lastPlayed).getTime() + 1 : lastCursor;
+      page += 1;
+      // small delay to be nice to Spotify
+      await new Promise((r) => setTimeout(r, 75));
     }
-    const payload = await spRes.json();
-    const items = Array.isArray(payload.items) ? payload.items : [];
-    if (!items.length) return NextResponse.json({ ok: true, items_received: 0, imported: 0 });
+    if (!allItems.length) {
+      // No new items; still mark last sync time for UX
+      await supabaseAdmin
+        .from("profiles")
+        .update({ spotify_last_sync_at: new Date().toISOString() })
+        .eq("id", userId);
+      return NextResponse.json({ ok: true, items_received: 0, imported: 0, pages: 0 });
+    }
 
     type TrackRow = {
       id: string;
@@ -127,7 +152,7 @@ export async function POST(req: Request) {
     const trackArtistSet = new Set<string>();
     const trackArtistRows: TrackArtistRow[] = [];
 
-    for (const it of items) {
+    for (const it of allItems) {
       const tr = it?.track;
       if (!tr?.id) continue;
 
@@ -217,11 +242,30 @@ export async function POST(req: Request) {
       .upsert(listens, { onConflict: "user_id,track_id,played_at" });
     if (lsErr) return NextResponse.json({ error: lsErr.message, where: "listens.upsert" }, { status: 400 });
 
+    // 8) Update cursors and profile last sync
+    const latestMs = allItems[0]?.played_at ? new Date(allItems[0].played_at).getTime() : null;
+    const newCursor = Math.max(
+      0,
+      ...allItems
+        .map((it: any) => (it?.played_at ? new Date(it.played_at).getTime() : 0))
+        .filter(Boolean)
+    );
+    await supabaseAdmin
+      .from("spotify_accounts")
+      .update({ last_recent_sync_at: new Date().toISOString(), last_after_cursor_ms: newCursor || latestMs || null })
+      .eq("user_id", userId);
+
+    await supabaseAdmin
+      .from("profiles")
+      .update({ spotify_last_sync_at: new Date().toISOString() })
+      .eq("id", userId);
+
     return NextResponse.json({
       ok: true,
-      apiUrl,
-      items_received: items.length,
+      pages: page,
+      items_received: allItems.length,
       imported: listens.length,
+      last_after_cursor_ms: newCursor || null,
     });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message || String(e) }, { status: 500 });
