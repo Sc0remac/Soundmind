@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict aSzEHIgJhscb023RCnUP41D6ZmTM9jg0AgLnZRAcLazf3jqzJmLu2FUO47bAy2P
+\restrict 9qhx6MVUZhidoohzcwS6g75mNrBTJbYg3QCEdsvwF5Sj734s1Lo3bIPtDc9z8bC
 
 -- Dumped from database version 17.4
 -- Dumped by pg_dump version 17.6 (Homebrew)
@@ -551,6 +551,17 @@ BEGIN
   REFRESH MATERIALIZED VIEW CONCURRENTLY public.mv_user_artist_counts_daily;
   REFRESH MATERIALIZED VIEW CONCURRENTLY public.mv_user_genre_counts_daily;
 END;
+$$;
+
+
+--
+-- Name: refresh_performance_rollup(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.refresh_performance_rollup() RETURNS void
+    LANGUAGE sql SECURITY DEFINER
+    AS $$
+  refresh materialized view public.mv_sessions_performance;
 $$;
 
 
@@ -5530,5 +5541,5 @@ CREATE EVENT TRIGGER pgrst_drop_watch ON sql_drop
 -- PostgreSQL database dump complete
 --
 
-\unrestrict aSzEHIgJhscb023RCnUP41D6ZmTM9jg0AgLnZRAcLazf3jqzJmLu2FUO47bAy2P
+\unrestrict 9qhx6MVUZhidoohzcwS6g75mNrBTJbYg3QCEdsvwF5Sj734s1Lo3bIPtDc9z8bC
 
