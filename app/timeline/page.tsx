@@ -1,13 +1,14 @@
 // app/timeline/page.tsx
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
+import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import { GroupedVirtuoso } from "react-virtuoso";
 import { Button, Chip, Modal, ModalBody, ModalContent, ModalHeader, useDisclosure } from "@nextui-org/react";
-import { Dumbbell, Smile, Music2, ChevronDown, ChevronRight, Search, CalendarDays, Plus, SortDesc, SortAsc, Sparkles } from "lucide-react";
+import { Dumbbell, Smile, Music2, ChevronDown, ChevronRight, Search, CalendarDays, Plus, Sparkles } from "lucide-react";
 
 // -------- Types matching /api/timeline --------
 type ApiDay = {
@@ -19,11 +20,14 @@ type ApiDay = {
     workout_count: number;
     music_minutes: number | null;
     track_count: number;
+    top_genre?: string | null;
+    entry_count?: number;
   };
   entries: Array<
     | { type: "workout"; id: string; at: string; name: string; split_name: string | null; volume: number | null }
     | { type: "mood"; id: string; at: string; score: number; post_workout: boolean; energy: number | null; stress: number | null; label: string | null }
     | { type: "music"; id: string; at: string; track_id: string; track_name: string | null; artist_name: string | null; album_image_url: string | null; duration_ms: number | null }
+    | { type: "bundle"; id: string; at: string; during_workout: boolean; workout_id: string | null; count: number; minutes: number; time_window: string; top_track: { name: string | null; artist: string | null } | null; thumbs: string[]; tracks: { id: string; at: string; track_id: string; track_name: string | null; artist_name: string | null; album_image_url: string | null; duration_ms: number | null }[] }
   >;
 };
 
@@ -35,7 +39,7 @@ type UiMusic = RowBase & { kind: "music"; id: string; track_id: string; track_na
 type UiBundle = RowBase & {
   kind: "bundle";
   id: string; // synthetic
-  title: string; // e.g., "9 tracks • 72 min" or "During workout: 7 tracks"
+  title: string; // e.g., "9 tracks · 72 min (09:09–09:45)"
   duringWorkoutId?: string | null;
   count: number;
   minutes: number;
@@ -52,6 +56,44 @@ const dateLabel = (isoDay: string) => {
   const d = new Date(`${isoDay}T00:00:00`);
   return d.toLocaleDateString(undefined, { weekday: "short", day: "2-digit", month: "short", year: "numeric" });
 };
+const nf = new Intl.NumberFormat();
+
+type Token =
+  | { k: "type"; v: "workout" | "mood" | "music" }
+  | { k: "artist"; v: string }
+  | { k: "genre"; v: string }
+  | { k: "mood" | "energy" | "stress"; op: ">" | ">=" | "<" | "<=" | "="; n: number }
+  | { k: "date"; v: string };
+
+function parseTokens(input: string): Token[] {
+  const tokens: Token[] = [];
+  const parts = input.match(/\S+\:\"[^\"]+\"|\S+\:'[^']+'|\S+\:[^\s]+|\S+/g) || [];
+  for (const p of parts) {
+    const m = /^(\w+):(.*)$/.exec(p);
+    if (!m) continue;
+    const key = m[1].toLowerCase();
+    let val = m[2].trim();
+    if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) val = val.slice(1, -1);
+    if (key === "type") {
+      const v = val.toLowerCase();
+      if (v === "workout" || v === "mood" || v === "music") tokens.push({ k: "type", v });
+      continue;
+    }
+    if (key === "artist") { tokens.push({ k: "artist", v: val }); continue; }
+    if (key === "genre") { tokens.push({ k: "genre", v: val }); continue; }
+    if (key === "date") { tokens.push({ k: "date", v: val }); continue; }
+    if (["mood","energy","stress"].includes(key)) {
+      const mm = /^(>=|<=|>|<|=)?\s*(\d+(?:\.\d+)?)$/.exec(val);
+      if (mm) {
+        const op = (mm[1] || ">=") as any;
+        const n = Number(mm[2]);
+        tokens.push({ k: key as any, op, n });
+      }
+      continue;
+    }
+  }
+  return tokens;
+}
 function minutesFromMs(list: { duration_ms: number | null }[]) {
   const total = list.reduce((acc, t) => acc + (typeof t.duration_ms === "number" ? t.duration_ms : 0), 0);
   return Math.round(total / 60000);
@@ -173,18 +215,26 @@ function linkMoodToWorkout(m: UiMood, workouts: UiWorkout[]): UiMood {
 
 // -------- Page --------
 export default function TimelinePage() {
+  const router = useRouter();
+  const sp = useSearchParams();
   const [days, setDays] = useState<ApiDay[]>([]);
   const [loading, setLoading] = useState(true);
   const [connectedSpotify, setConnectedSpotify] = useState<boolean | null>(null);
 
   // Toolbar state
-  const [q, setQ] = useState("");
-  const [types, setTypes] = useState<{ workout: boolean; mood: boolean; music: boolean }>({ workout: true, mood: true, music: true });
-  const [range, setRange] = useState<"today" | "7d" | "30d" | "custom">("30d");
-  const [customFrom, setCustomFrom] = useState<string>("");
-  const [customTo, setCustomTo] = useState<string>("");
-  const [density, setDensity] = useState<"comfortable" | "compact">("comfortable");
-  const [sort, setSort] = useState<"desc" | "asc">("desc");
+  const [q, setQ] = useState<string>(sp.get("q") || "");
+  const [types, setTypes] = useState<{ workout: boolean; mood: boolean; music: boolean }>(() => {
+    const t = (sp.get("types") || "workout,mood,music").split(",").reduce((acc, s) => ({ ...acc, [s]: true }), {} as any);
+    return { workout: !!(t as any).workout, mood: !!(t as any).mood, music: !!(t as any).music };
+  });
+  const [range, setRange] = useState<"today" | "7d" | "30d" | "custom">(((sp.get("range") as any) || (sp.get("days") === "7" ? "7d" : sp.get("days") === "30" ? "30d" : "30d")));
+  const [customFrom, setCustomFrom] = useState<string>(sp.get("from") ? new Date(sp.get("from")!).toISOString().slice(0,10) : "");
+  const [customTo, setCustomTo] = useState<string>(sp.get("to") ? new Date(sp.get("to")!).toISOString().slice(0,10) : "");
+  const [density, setDensity] = useState<"comfortable" | "compact">(((sp.get("density") as any) || "comfortable"));
+  const [sort, setSort] = useState<"desc" | "asc">(((sp.get("sort") || "desc").toLowerCase() === "asc") ? "asc" : "desc");
+  const [sortMode, setSortMode] = useState<"newest" | "oldest" | "grouped">(((sp.get("sortMode") as any) || "newest"));
+  const [scrollTopBtn, setScrollTopBtn] = useState(false);
+  const inputRef = useRef<HTMLInputElement | null>(null);
 
   // Collapsed state per day, persisted
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
@@ -214,8 +264,38 @@ export default function TimelinePage() {
       p.set("to", new Date(customTo).toISOString());
     }
     p.set("sort", sort);
+    p.set("compact", density === "compact" ? "1" : "0");
     return p.toString();
-  }, [types, range, customFrom, customTo, sort]);
+  }, [types, range, customFrom, customTo, sort, density]);
+
+  // Reflect state into URL
+  useEffect(() => {
+    const p = new URLSearchParams(filtersQS);
+    if (q) p.set("q", q); else p.delete("q");
+    p.set("density", density);
+    p.set("sortMode", sortMode);
+    router.replace(`/timeline?${p.toString()}`);
+  }, [filtersQS, q, density, sortMode, router]);
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "/") { e.preventDefault(); inputRef.current?.focus(); }
+      if (e.key.toLowerCase() === "d") { setDensity((d) => (d === "compact" ? "comfortable" : "compact")); }
+      if (e.key.toLowerCase() === "s") { setSortMode((m) => (m === "newest" ? "oldest" : m === "oldest" ? "grouped" : "newest")); }
+      if (e.key.toLowerCase() === "f") { /* reserved for advanced filter drawer */ }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // Show jump-to-top button after scrolling
+  useEffect(() => {
+    const onScroll = () => setScrollTopBtn(window.scrollY > 1200);
+    window.addEventListener("scroll", onScroll);
+    onScroll();
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -299,20 +379,69 @@ export default function TimelinePage() {
       // Link moods to workouts by proximity
       const moodsLinked = moods.map((m) => linkMoodToWorkout(m, workouts));
 
-      // Bundle music
-      const bundlesAndSingles = bundleListens(tracks, workouts, density);
+      // Use server-provided bundles
+      const bundlesFromApi: UiBundle[] = d.entries
+        .filter((e) => e.type === "bundle")
+        .map((b) => ({
+          kind: "bundle",
+          id: (b as any).id,
+          at: (b as any).at,
+          title: `${(b as any).count} ${(b as any).count === 1 ? "track" : "tracks"} · ${(b as any).minutes} min (${(b as any).time_window})${(b as any).during_workout ? " · during workout" : ""}`,
+          duringWorkoutId: (b as any).workout_id ?? null,
+          count: (b as any).count,
+          minutes: (b as any).minutes,
+          topTrack: (b as any).count >= 3 ? { name: (b as any).top_track?.name ?? null, artist: (b as any).top_track?.artist ?? null } : null,
+          thumbs: ((b as any).thumbs ?? []) as string[],
+          tracks: ((b as any).tracks ?? []).map((t: any) => ({
+            kind: "music",
+            id: t.id,
+            at: t.at,
+            track_id: t.track_id,
+            track_name: t.track_name,
+            artist_name: t.artist_name,
+            album_image_url: t.album_image_url,
+            duration_ms: t.duration_ms,
+          })) as any,
+        }));
 
-      const rows: UiRow[] = [...workouts, ...moodsLinked, ...bundlesAndSingles].sort((a, b) =>
-        sort === "asc" ? (a.at < b.at ? -1 : 1) : a.at > b.at ? -1 : 1
-      );
+      let rows: UiRow[] = [...workouts, ...moodsLinked, ...bundlesFromApi, ...tracks];
+      if (sortMode === "grouped") {
+        const order: Record<string, number> = { mood: 0, workout: 1, bundle: 2, music: 3 } as any;
+        rows.sort((a: any, b: any) => (order[a.kind] - order[b.kind]) || (a.at < b.at ? -1 : 1));
+        if (sort === "desc") rows = rows.reverse();
+      } else {
+        rows.sort((a, b) => (sort === "asc" ? (a.at < b.at ? -1 : 1) : a.at > b.at ? -1 : 1));
+      }
 
       // Apply search and type filters client-side
       const qx = q.trim().toLowerCase();
-      const typeFlags = types;
+      const tokens = parseTokens(q);
+      let typeFlags = { ...types };
+      const typeTokens = tokens.filter((t) => t.k === 'type') as any[];
+      if (typeTokens.length) {
+        typeFlags = { workout: false, mood: false, music: false } as any;
+        typeTokens.forEach((t) => { (typeFlags as any)[t.v] = true; });
+      }
       const filtered = rows.filter((r) => {
         if (r.kind === "workout" && !typeFlags.workout) return false;
         if (r.kind === "mood" && !typeFlags.mood) return false;
         if ((r.kind === "music" || r.kind === "bundle") && !typeFlags.music) return false;
+        // token constraints
+        for (const t of tokens) {
+          if (t.k === 'artist' && r.kind === 'music') {
+            if (!((r.artist_name || '').toLowerCase().includes(t.v.toLowerCase()))) return false;
+          }
+          if ((t.k === 'mood' || t.k === 'energy' || t.k === 'stress') && r.kind === 'mood') {
+            const val = t.k === 'mood' ? (r as UiMood).score : (r as any)[t.k];
+            if (typeof val === 'number') {
+              if (t.op === '>' && !(val > t.n)) return false;
+              if (t.op === '>=' && !(val >= t.n)) return false;
+              if (t.op === '<' && !(val < t.n)) return false;
+              if (t.op === '<=' && !(val <= t.n)) return false;
+              if (t.op === '=' && !(val === t.n)) return false;
+            }
+          }
+        }
         if (!qx) return true;
         if (r.kind === "workout") {
           return (
@@ -380,17 +509,34 @@ export default function TimelinePage() {
             placeholder="Search (bench, Coldplay, 8/10)"
             value={q}
             onChange={(e) => setQ(e.target.value)}
+            ref={inputRef}
           />
           <Search className="absolute left-2 top-1/2 -translate-y-1/2 size-4 text-white/60" />
         </div>
+        {parseTokens(q).length > 0 && (
+          <div className="w-full flex flex-wrap gap-1 px-1">
+            {parseTokens(q).map((t, idx) => {
+              const label = t.k === 'type' ? `type:${t.v}` : t.k === 'artist' ? `artist:"${t.v}"` : t.k === 'genre' ? `genre:"${t.v}"` : t.k === 'date' ? `date:${t.v}` : `${t.k}${(t as any).op || ''}${(t as any).n}`;
+              return (
+                <button key={idx} className="text-xs rounded-full border border-white/10 bg-white/5 px-2 py-0.5"
+                  onClick={() => {
+                    const str = label.replace(/([.*+?^${}()|[\]\\])/g, '\\$1');
+                    const re = new RegExp(`(?:^|\\s)${str}(?=\\s|$)`);
+                    setQ((prev) => prev.replace(re, "").trim());
+                  }}
+                  title="Remove filter"
+                >
+                  {label} ×
+                </button>
+              );
+            })}
+          </div>
+        )}
         <div className="flex items-center gap-1">
-          <span className="rounded-lg border border-white/10 px-2 py-1 text-xs text-white/70">Filters</span>
-          <Button size="sm" variant={allSelected ? "flat" : "bordered"} onPress={() => setAll(!allSelected)}>
-            All
-          </Button>
           <Button size="sm" variant={types.workout ? "flat" : "bordered"} onPress={() => toggleType("workout")} startContent={<Dumbbell className="size-4" />}>Workouts</Button>
           <Button size="sm" variant={types.mood ? "flat" : "bordered"} onPress={() => toggleType("mood")} startContent={<Smile className="size-4" />}>Mood</Button>
           <Button size="sm" variant={types.music ? "flat" : "bordered"} onPress={() => toggleType("music")} startContent={<Music2 className="size-4" />}>Music</Button>
+          {allSelected && <span className="ml-1 text-xs text-white/60">All selected</span>}
         </div>
         <div className="ml-auto flex items-center gap-1">
           <span className="hidden sm:inline rounded-lg border border-white/10 px-2 py-1 text-xs text-white/70">Date</span>
@@ -413,9 +559,11 @@ export default function TimelinePage() {
         </div>
         <div className="flex items-center gap-1">
           <span className="hidden sm:inline rounded-lg border border-white/10 px-2 py-1 text-xs text-white/70">Sort</span>
-          <Button size="sm" variant="bordered" onPress={() => setSort((s) => (s === "desc" ? "asc" : "desc"))} startContent={sort === "desc" ? <SortDesc className="size-4" /> : <SortAsc className="size-4" />}>
-            {sort === "desc" ? "Newest first" : "Oldest first"}
-          </Button>
+          <select className="rounded-lg border border-white/10 bg-transparent px-2 py-1 text-sm" value={sortMode} onChange={(e)=>setSortMode(e.target.value as any)}>
+            <option value="newest">Newest first</option>
+            <option value="oldest">Oldest first</option>
+            <option value="grouped">Grouped by type → time</option>
+          </select>
         </div>
         <div className="flex items-center gap-1">
           <Button as={Link} href="/log-mood" size="sm" color="success" variant="flat" startContent={<Plus className="size-4" />}>Mood</Button>
@@ -452,7 +600,7 @@ export default function TimelinePage() {
               const d = uiDays[index];
               const isCollapsed = collapsed[d.date];
               return (
-                <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-white/10 bg-slate-900/70 px-3 py-2 backdrop-blur">
+                <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-white/10 bg-slate-900/70 px-3 py-2 backdrop-blur" title={`${uiDays[index].summary.top_genre ? `Top genre: ${uiDays[index].summary.top_genre}` : ''}${uiDays[index].summary.entry_count ? ` · entries: ${uiDays[index].summary.entry_count}` : ''}`.trim()}>
                   <button
                     onClick={() => {
                       const next = { ...collapsed, [d.date]: !isCollapsed };
@@ -463,12 +611,15 @@ export default function TimelinePage() {
                   >
                     {isCollapsed ? <ChevronRight className="size-4" /> : <ChevronDown className="size-4" />}
                     <span className="font-medium">{dateLabel(d.date)}</span>
-                    <span className="text-xs text-white/60">· {d.rows.length} entries</span>
+                    {isCollapsed && <Chip size="sm" variant="flat" className="bg-white/10">{d.rows.length}</Chip>}
                   </button>
                   <div className="ml-auto flex items-center gap-2">
-                    <Chip size="sm" variant="flat" className="bg-emerald-500/15">Mood {d.summary.mood_avg ?? "—"}</Chip>
-                    <Chip size="sm" variant="flat" className="bg-indigo-500/15">Vol {d.summary.workout_volume != null ? d.summary.workout_volume : "—"}</Chip>
-                    <Chip size="sm" variant="flat" className="bg-violet-500/15">{d.summary.music_minutes != null ? `${d.summary.music_minutes} min` : "—"}</Chip>
+                    {connectedSpotify === false && (uiDays[index].summary.track_count || 0) === 0 && (
+                      <Link href="/music" className="text-xs text-white/60 underline underline-offset-2">No music captured — Connect Spotify</Link>
+                    )}
+                    {typeof d.summary.mood_avg === 'number' && <Chip size="sm" variant="flat" className="bg-emerald-500/15">Mood {d.summary.mood_avg.toFixed(1)}</Chip>}
+                    {typeof d.summary.workout_volume === 'number' && <Chip size="sm" variant="flat" className="bg-indigo-500/15">Vol {nf.format(d.summary.workout_volume)}</Chip>}
+                    {typeof d.summary.music_minutes === 'number' && <Chip size="sm" variant="flat" className="bg-violet-500/15">Music {d.summary.music_minutes} min</Chip>}
                   </div>
                 </div>
               );
@@ -476,9 +627,11 @@ export default function TimelinePage() {
             itemContent={(i) => {
               const { row, dayIndex } = flatRows[i];
               const pad = density === "compact" ? "py-1.5" : "py-2.5";
-              const border = row.kind === "mood" ? "border-l-2 border-l-emerald-500/40" : row.kind === "workout" ? "border-l-2 border-l-indigo-500/40" : row.kind === "bundle" || row.kind === "music" ? "border-l-2 border-l-violet-500/40" : "";
+              const border = row.kind === "mood" ? "border-l-2" : row.kind === "workout" ? "border-l-2 border-l-indigo-500/40" : row.kind === "bundle" || row.kind === "music" ? "border-l-2 border-l-violet-500/40" : "";
               return (
-                <div key={`${dayIndex}-${i}`} className={`flex items-start gap-3 px-3 ${pad} ${border}`}>
+                <div key={`${dayIndex}-${i}`} className={`flex items-start gap-3 px-3 ${pad} ${border}`}
+                  style={row.kind === 'mood' ? { borderLeftColor: `hsl(${((row as UiMood).score/10)*120}, 70%, 45%)` } : undefined}
+                >
                   <time className="w-12 shrink-0 text-xs tabular-nums text-white/70">{to24h(row.at)}</time>
                   {row.kind === "workout" ? (
                     <div id={(row as UiWorkout).anchor} className="flex w-full items-center gap-2">
@@ -486,12 +639,10 @@ export default function TimelinePage() {
                         <Dumbbell className="size-4" />
                       </div>
                       <div className="min-w-0">
-                        <div className="truncate text-sm font-medium">{row.name}</div>
+                        <div className="truncate text-sm font-medium">{row.name}{(row as UiWorkout).split ? ` — ${(row as UiWorkout).split}` : ""}</div>
                         <div className="text-xs text-white/60">
-                          {(row as UiWorkout).split || "Session"}
-                          {typeof row.volume === "number" && (
-                            <span className="ml-1">• vol {Math.round(row.volume)}</span>
-                          )}
+                          {typeof row.volume === "number" && <span>Volume {nf.format(Math.round(row.volume))}</span>}
+                          {typeof (row as any).sets === 'number' && <span className="ml-1">· {(row as any).sets} sets</span>}
                         </div>
                       </div>
                     </div>
@@ -501,10 +652,10 @@ export default function TimelinePage() {
                         <Smile className="size-4" />
                       </div>
                       <div className="min-w-0">
-                        <div className="truncate text-sm font-medium">Mood {row.score}/10 {row.label ? `· ${row.label}` : ""}</div>
+                        <div className="truncate text-sm font-medium">Mood {row.score}/10{row.label ? ` — ${row.label}` : ""}</div>
                         <div className="text-xs text-white/60">
                           {row.energy != null && <span>energy {row.energy}</span>}
-                          {row.stress != null && <span className="ml-1">• stress {row.stress}</span>}
+                          {row.stress != null && <span className="ml-1">· stress {row.stress}</span>}
                           {row.post_workout && <Chip size="sm" variant="flat" className="ml-2 bg-emerald-500/15">post-workout</Chip>}
                           {row.linkWorkoutId && (
                             <Link href={`#workout-${row.linkWorkoutId}`} className="ml-2 text-xs underline underline-offset-2">after workout</Link>
@@ -517,13 +668,16 @@ export default function TimelinePage() {
                       <div className="inline-flex h-8 w-8 items-center justify-center rounded-md bg-violet-500/15 text-violet-300 ring-1 ring-white/10">
                         <Music2 className="size-4" />
                       </div>
-                      {row.album_image_url && (
+                      {density === 'comfortable' && row.album_image_url && (
                         <Image src={row.album_image_url} alt="" width={40} height={40} className="h-10 w-10 shrink-0 rounded-md object-cover" />
                       )}
                       <div className="min-w-0">
                         <div className="truncate text-sm font-medium">{row.track_name || "Unknown track"} <span className="text-white/60">— {row.artist_name || "Unknown"}</span></div>
-                        <div className="text-xs text-white/60">{typeof row.duration_ms === "number" ? `${Math.round(row.duration_ms / 1000)}s` : ""}</div>
+                        <div className="text-xs text-white/60">{typeof row.duration_ms === "number" ? `${Math.round((row.duration_ms/1000)/60)} min` : ""}</div>
                       </div>
+                      {density === 'compact' && row.album_image_url && (
+                        <Image src={row.album_image_url} alt="" width={28} height={28} className="ml-auto h-7 w-7 shrink-0 rounded object-cover" />
+                      )}
                     </div>
                   ) : (
                     // bundle
@@ -533,13 +687,9 @@ export default function TimelinePage() {
                       </div>
                       <div className="min-w-0">
                         <div className="truncate text-sm font-medium">{(row as UiBundle).title}</div>
-                        <div className="text-xs text-white/60">
-                          {row.kind === "bundle" && (row as UiBundle).topTrack?.name ? (
-                            <>Top: '{(row as UiBundle).topTrack?.name}' — {(row as UiBundle).topTrack?.artist}</>
-                          ) : (
-                            <>&nbsp;</>
-                          )}
-                        </div>
+                        {(row as UiBundle).topTrack && (row as UiBundle).count >= 3 && (
+                          <div className="text-xs text-white/60">Top: '{(row as UiBundle).topTrack?.name}' — {(row as UiBundle).topTrack?.artist}</div>
+                        )}
                       </div>
                       <div className="ml-auto grid grid-cols-3 gap-1">
                         {(row as UiBundle).thumbs.map((src, idx) => (
@@ -561,6 +711,12 @@ export default function TimelinePage() {
         <Button as={Link} href="/insights" variant="flat" size="sm" startContent={<Sparkles className="size-4" />}>View weekly insights</Button>
       </div>
 
+      {scrollTopBtn && (
+        <div className="fixed bottom-4 right-4">
+          <Button size="sm" variant="flat" onPress={() => window.scrollTo({ top: 0, behavior: 'smooth' })}>Jump to Today</Button>
+        </div>
+      )}
+
       {/* Bundle drawer/sheet */}
       <Modal isOpen={isOpen} onOpenChange={onOpenChange} size="full" backdrop="blur" placement="center" classNames={{ base: "md:max-w-[560px]" }}>
         <ModalContent>
@@ -580,7 +736,7 @@ export default function TimelinePage() {
                         )}
                         <div className="min-w-0">
                           <div className="truncate text-sm font-medium">{t.track_name || "Unknown track"} <span className="text-white/60">— {t.artist_name || "Unknown"}</span></div>
-                          <div className="text-xs text-white/60">{to24h(t.at)} · {typeof t.duration_ms === "number" ? `${Math.round(t.duration_ms / 1000)}s` : ""}</div>
+                          <div className="text-xs text-white/60">{to24h(t.at)} · {typeof t.duration_ms === "number" ? `${Math.round((t.duration_ms/1000)/60)} min` : ""}</div>
                         </div>
                       </div>
                     ))}

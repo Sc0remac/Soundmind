@@ -39,11 +39,24 @@ type EntryMusic = {
   album_image_url: string | null;
   duration_ms: number | null;
 };
+type EntryBundle = {
+  type: "bundle";
+  id: string; // synthetic
+  at: string; // ISO of first track
+  during_workout: boolean;
+  workout_id: string | null;
+  count: number;
+  minutes: number;
+  time_window: string; // e.g. 09:09–09:45
+  top_track: { name: string | null; artist: string | null } | null;
+  thumbs: string[]; // up to 3 album images
+  tracks: Array<Pick<EntryMusic, "id" | "at" | "track_id" | "track_name" | "artist_name" | "album_image_url" | "duration_ms">>;
+};
 
 type DayBlock = {
   date: string; // YYYY-MM-DD
-  summary: DaySummary;
-  entries: Array<EntryWorkout | EntryMood | EntryMusic>;
+  summary: DaySummary & { top_genre: string | null; entry_count: number };
+  entries: Array<EntryWorkout | EntryMood | EntryMusic | EntryBundle>;
 };
 
 function parseDateRange(searchParams: URLSearchParams) {
@@ -84,6 +97,7 @@ export async function GET(req: Request) {
 
     const { startIso, endIso } = parseDateRange(searchParams);
     const sort = (searchParams.get("sort") || "desc").toLowerCase() === "asc" ? "asc" : "desc";
+    const compact = searchParams.get("compact") === "1" || searchParams.get("density") === "compact";
     const typesParam = (searchParams.get("types") || "workout,mood,music").toLowerCase();
     const includeWorkout = typesParam.includes("workout");
     const includeMood = typesParam.includes("mood");
@@ -112,7 +126,7 @@ export async function GET(req: Request) {
       includeMusic
         ? supa
             .from("v_spotify_listens_expanded")
-            .select("id,user_id,played_at,track_id,track_name,artist_name,album_image_url")
+            .select("id,user_id,played_at,track_id,track_name,artist_name,album_image_url,genre")
             .eq("user_id", user.id)
             .gte("played_at", startIso)
             .lte("played_at", endIso)
@@ -151,6 +165,7 @@ export async function GET(req: Request) {
       track_name: r.track_name != null ? String(r.track_name) : null,
       artist_name: r.artist_name != null ? String(r.artist_name) : null,
       album_image_url: r.album_image_url != null ? String(r.album_image_url) : null,
+      genre: r.genre != null ? String(r.genre) : null,
     }));
 
     // Fetch durations for tracks used in listens
@@ -168,7 +183,7 @@ export async function GET(req: Request) {
       });
     }
 
-    const listens: EntryMusic[] = listensRaw.map((r) => ({
+    const listens: (EntryMusic & { genre: string | null })[] = listensRaw.map((r) => ({
       type: "music",
       id: r.id,
       at: r.at,
@@ -177,6 +192,7 @@ export async function GET(req: Request) {
       artist_name: r.artist_name,
       album_image_url: r.album_image_url,
       duration_ms: durationByTrack.get(r.track_id) ?? null,
+      genre: r.genre ?? null,
     }));
 
     // Build day groups and summaries
@@ -199,43 +215,115 @@ export async function GET(req: Request) {
 
     const days: DayBlock[] = [];
     for (const [date, items] of groupMap.entries()) {
-      let moodSum = 0;
-      let moodN = 0;
-      let volSum = 0;
-      let volN = 0;
-      let musicMs = 0;
-      let trackN = 0;
+      // split by type for bundling and summary
+      const dayWorkouts = items.filter((x): x is EntryWorkout => x.type === "workout");
+      const dayMoods = items.filter((x): x is EntryMood => x.type === "mood");
+      const dayTracks = items.filter((x): x is EntryMusic & { genre?: string | null } => x.type === "music") as (EntryMusic & { genre?: string | null })[];
 
-      for (const it of items) {
-        if (it.type === "mood") {
-          if (typeof it.score === "number" && !isNaN(it.score)) {
-            moodSum += it.score;
-            moodN += 1;
+      // summaries
+      const moodN = dayMoods.length;
+      const moodSum = dayMoods.reduce((a, m) => a + (typeof m.score === "number" ? m.score : 0), 0);
+      const volN = dayWorkouts.length;
+      const volSum = dayWorkouts.reduce((a, w) => a + (typeof w.volume === "number" ? w.volume : 0), 0);
+      const trackN = dayTracks.length;
+      const musicMs = dayTracks.reduce((a, t) => a + (typeof t.duration_ms === "number" ? t.duration_ms : 0), 0);
+      const genreMap = new Map<string, number>();
+      for (const t of dayTracks) {
+        const g = (t as any).genre as string | null;
+        if (g) genreMap.set(g, (genreMap.get(g) || 0) + 1);
+      }
+      const top_genre = [...genreMap.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+
+      // server-side bundling
+      const windows = dayWorkouts.map((w) => ({ id: w.id, start: new Date(w.at).getTime(), end: new Date(w.at).getTime() + 2 * 3600_000 }));
+      const sortedTracks = [...dayTracks].sort((a, b) => (a.at < b.at ? -1 : 1));
+      const bundles: EntryBundle[] = [];
+      const singles: EntryMusic[] = [];
+      const maxGap = 15 * 60 * 1000;
+      const maxSpan = 90 * 60 * 1000;
+      const threshold = compact ? 1 : 3; // compact always bundle
+
+      let curr: (EntryMusic & { during_workout?: string | null })[] = [];
+      const isDuring = (ts: number) => windows.find((w) => ts >= w.start && ts <= w.end)?.id || null;
+      for (const t of sortedTracks) {
+        const tMs = new Date(t.at).getTime();
+        (t as any).during_workout = isDuring(tMs);
+        if (!curr.length) {
+          curr.push(t as any);
+          continue;
+        }
+        const prev = curr[curr.length - 1];
+        const gap = tMs - new Date(prev.at).getTime();
+        const span = tMs - new Date(curr[0].at).getTime();
+        const overlapWorkout = (t as any).during_workout || (prev as any).during_workout;
+        if ((gap <= maxGap && span <= maxSpan) || overlapWorkout) {
+          curr.push(t as any);
+        } else {
+          if (curr.length >= threshold || (curr.some((x) => x.during_workout))) {
+            const b = toBundle(curr);
+            bundles.push(b);
+          } else {
+            singles.push(...(curr as EntryMusic[]));
           }
-        } else if (it.type === "workout") {
-          if (typeof it.volume === "number" && !isNaN(it.volume)) {
-            volSum += it.volume;
-            volN += 1;
-          }
-        } else if (it.type === "music") {
-          trackN += 1;
-          if (typeof it.duration_ms === "number" && !isNaN(it.duration_ms)) musicMs += it.duration_ms;
+          curr = [t as any];
         }
       }
+      if (curr.length) {
+        if (curr.length >= threshold || curr.some((x) => x.during_workout)) bundles.push(toBundle(curr));
+        else singles.push(...(curr as EntryMusic[]));
+      }
 
-      const summary: DaySummary = {
+      function toBundle(list: (EntryMusic & { during_workout?: string | null })[]): EntryBundle {
+        const count = list.length;
+        const minutes = Math.round(list.reduce((a, x) => a + (typeof x.duration_ms === "number" ? x.duration_ms : 0), 0) / 60000);
+        const start = new Date(list[0].at);
+        const end = new Date(list[list.length - 1].at);
+        const pad = (n: number) => String(n).padStart(2, "0");
+        const fmt = (d: Date) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+        const time_window = `${fmt(start)}–${fmt(end)}`;
+        const top_track = { name: list[0].track_name ?? null, artist: list[0].artist_name ?? null };
+        const thumbs = Array.from(new Set(list.map((x) => x.album_image_url).filter(Boolean))).slice(0, 3) as string[];
+        const duringId = list.find((x) => x.during_workout)?.during_workout ?? null;
+        return {
+          type: "bundle",
+          id: `b-${date}-${list[0].id}`,
+          at: list[0].at,
+          during_workout: !!duringId,
+          workout_id: duringId,
+          count,
+          minutes,
+          time_window,
+          top_track,
+          thumbs,
+          tracks: list.map((t) => ({
+            id: t.id,
+            at: t.at,
+            track_id: t.track_id,
+            track_name: t.track_name,
+            artist_name: t.artist_name,
+            album_image_url: t.album_image_url,
+            duration_ms: t.duration_ms,
+          })),
+        };
+      }
+
+      const summary: DayBlock["summary"] = {
         mood_avg: moodN ? Number((moodSum / moodN).toFixed(2)) : null,
         mood_count: moodN,
         workout_volume: volN ? Math.round(volSum) : null,
         workout_count: volN,
         music_minutes: musicMs ? Math.round(musicMs / 60000) : null,
         track_count: trackN,
+        top_genre,
+        entry_count: items.length,
       };
 
-      // sort items within day by time according to sort
-      items.sort((a, b) => (a.at < b.at ? (sort === "asc" ? -1 : 1) : a.at > b.at ? (sort === "asc" ? 1 : -1) : 0));
+      // Compose final entries: workouts + moods + bundles + singles
+      const composed: Array<EntryWorkout | EntryMood | EntryMusic | EntryBundle> = [];
+      composed.push(...dayWorkouts, ...dayMoods, ...bundles, ...singles);
+      composed.sort((a, b) => (a.at < b.at ? (sort === "asc" ? -1 : 1) : a.at > b.at ? (sort === "asc" ? 1 : -1) : 0));
 
-      days.push({ date, summary, entries: items });
+      days.push({ date, summary, entries: composed });
     }
 
     // Order days by date
