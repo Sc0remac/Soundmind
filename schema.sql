@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict iQqnoD4rKgoAaIHxHGsqoZbDTGf3eRnJ3iLHsemzoaTYbKDVpwZe0tXqoT4S4q2
+\restrict aSzEHIgJhscb023RCnUP41D6ZmTM9jg0AgLnZRAcLazf3jqzJmLu2FUO47bAy2P
 
 -- Dumped from database version 17.4
 -- Dumped by pg_dump version 17.6 (Homebrew)
@@ -482,6 +482,7 @@ CREATE TABLE public.moods (
     contexts text[] DEFAULT '{}'::text[],
     triggers text[] DEFAULT '{}'::text[],
     guidance_version smallint,
+    logged_at timestamp with time zone,
     CONSTRAINT moods_alcohol_units_check CHECK ((alcohol_units >= (0)::numeric)),
     CONSTRAINT moods_anxiety_check CHECK (((anxiety >= 0) AND (anxiety <= 10))),
     CONSTRAINT moods_caffeine_mg_check CHECK ((caffeine_mg >= 0)),
@@ -2345,6 +2346,19 @@ COMMENT ON COLUMN auth.users.is_sso_user IS 'Auth: Set this column to true when 
 
 
 --
+-- Name: analytics_events; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.analytics_events (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    event text NOT NULL,
+    payload jsonb,
+    created_at timestamp with time zone DEFAULT now()
+);
+
+
+--
 -- Name: body_parts; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2775,6 +2789,32 @@ CREATE TABLE public.training_splits_body_parts (
     user_id uuid DEFAULT auth.uid(),
     is_global boolean DEFAULT false NOT NULL,
     created_at timestamp with time zone DEFAULT now()
+);
+
+
+--
+-- Name: user_feedback; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.user_feedback (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    plan_id text NOT NULL,
+    verdict text NOT NULL,
+    reason text,
+    created_at timestamp with time zone DEFAULT now(),
+    CONSTRAINT user_feedback_verdict_check CHECK ((verdict = ANY (ARRAY['keep'::text, 'not_for_me'::text])))
+);
+
+
+--
+-- Name: user_preferences; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.user_preferences (
+    user_id uuid NOT NULL,
+    prefs jsonb DEFAULT '{}'::jsonb NOT NULL,
+    updated_at timestamp with time zone DEFAULT now()
 );
 
 
@@ -3312,6 +3352,14 @@ ALTER TABLE ONLY auth.users
 
 
 --
+-- Name: analytics_events analytics_events_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.analytics_events
+    ADD CONSTRAINT analytics_events_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: body_parts body_parts_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -3421,6 +3469,22 @@ ALTER TABLE ONLY public.training_splits_body_parts
 
 ALTER TABLE ONLY public.training_splits
     ADD CONSTRAINT training_splits_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: user_feedback user_feedback_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_feedback
+    ADD CONSTRAINT user_feedback_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: user_preferences user_preferences_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_preferences
+    ADD CONSTRAINT user_preferences_pkey PRIMARY KEY (user_id);
 
 
 --
@@ -4333,6 +4397,14 @@ ALTER TABLE ONLY auth.sso_domains
 
 
 --
+-- Name: analytics_events analytics_events_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.analytics_events
+    ADD CONSTRAINT analytics_events_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+
+--
 -- Name: body_parts body_parts_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -4474,6 +4546,22 @@ ALTER TABLE ONLY public.training_splits_body_parts
 
 ALTER TABLE ONLY public.training_splits
     ADD CONSTRAINT training_splits_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+
+--
+-- Name: user_feedback user_feedback_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_feedback
+    ADD CONSTRAINT user_feedback_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+
+--
+-- Name: user_preferences user_preferences_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_preferences
+    ADD CONSTRAINT user_preferences_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 
 
 --
@@ -4687,6 +4775,12 @@ CREATE POLICY "Users can view their own workouts" ON public.workouts FOR SELECT 
 
 
 --
+-- Name: analytics_events; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.analytics_events ENABLE ROW LEVEL SECURITY;
+
+--
 -- Name: spotify_artists artists read; Type: POLICY; Schema: public; Owner: -
 --
 
@@ -4884,6 +4978,48 @@ CREATE POLICY listens_update_own ON public.spotify_listens FOR UPDATE USING ((us
 --
 
 ALTER TABLE public.moods ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: analytics_events own_insert; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY own_insert ON public.analytics_events FOR INSERT WITH CHECK ((user_id = auth.uid()));
+
+
+--
+-- Name: user_feedback own_insert; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY own_insert ON public.user_feedback FOR INSERT WITH CHECK ((user_id = auth.uid()));
+
+
+--
+-- Name: analytics_events own_select; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY own_select ON public.analytics_events FOR SELECT USING ((user_id = auth.uid()));
+
+
+--
+-- Name: user_feedback own_select; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY own_select ON public.user_feedback FOR SELECT USING ((user_id = auth.uid()));
+
+
+--
+-- Name: user_preferences own_select; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY own_select ON public.user_preferences FOR SELECT USING ((user_id = auth.uid()));
+
+
+--
+-- Name: user_preferences own_upsert; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY own_upsert ON public.user_preferences USING ((user_id = auth.uid())) WITH CHECK ((user_id = auth.uid()));
+
 
 --
 -- Name: profiles; Type: ROW SECURITY; Schema: public; Owner: -
@@ -5150,6 +5286,18 @@ CREATE POLICY "tsbp update own" ON public.training_splits_body_parts FOR UPDATE 
 
 
 --
+-- Name: user_feedback; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.user_feedback ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: user_preferences; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.user_preferences ENABLE ROW LEVEL SECURITY;
+
+--
 -- Name: workout_exercises we_delete_own; Type: POLICY; Schema: public; Owner: -
 --
 
@@ -5382,5 +5530,5 @@ CREATE EVENT TRIGGER pgrst_drop_watch ON sql_drop
 -- PostgreSQL database dump complete
 --
 
-\unrestrict iQqnoD4rKgoAaIHxHGsqoZbDTGf3eRnJ3iLHsemzoaTYbKDVpwZe0tXqoT4S4q2
+\unrestrict aSzEHIgJhscb023RCnUP41D6ZmTM9jg0AgLnZRAcLazf3jqzJmLu2FUO47bAy2P
 

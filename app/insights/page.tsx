@@ -1,317 +1,405 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import * as React from "react";
 import { supabase } from "@/lib/supabaseClient";
+import { useRouter } from "next/navigation";
+import { Card, CardContent } from "@/components/ui/card";
+import Button from "@/components/ui/button";
+import Badge from "@/components/ui/badge";
+import Sheet from "@/components/ui/sheet";
+import { ToastProvider, Toaster, useToast } from "@/components/ui/use-toast";
+import { Music2, CalendarDays } from "lucide-react";
 
-// ---------- Types (from the new /summary) ----------
-type LabelImpact = { label: string; impact: number; n: number };
-type BestTime = { window: string; n: number };
-type SummaryOut = {
-  filters: { days: number; split: string | null; genre: string | null; artist: string | null; sample: number };
-  headline: {
-    score: number | null;
-    best_time: BestTime | null;
-    recipe: { label: string; type: "genre" | "artist"; energy: "low" | "mid" | "high" | null; bpm: [number, number] | null; impact: number; n: number } | null;
-    copy: { line: string | null };
-  };
-  boosters: { genres: LabelImpact[]; artists: LabelImpact[] };
-  drainers: { genres: LabelImpact[]; artists: LabelImpact[] };
-  recommendations: { play_url: string | null; notes: string };
+type Effect = "Big boost" | "Helps" | "Neutral" | "Drains";
+type Reliability = "Consistent" | "Often" | "Early hint";
+
+type SummaryAction = { id: string; label: string; primary?: boolean; href?: string; target?: string };
+type FaceliftData = {
+  sample: number;
+  states: { newUser: boolean; lowData: boolean; conflicting: boolean; stale: boolean; musicConnected: boolean };
+  weeklySummary: { line1: string; line2: string; actions: SummaryAction[]; evidence: string[] };
+  chips: { boosters: ChipItem[]; drainers: ChipItem[] };
+  best: { slots: string[]; pairings: { id: string; label: string; effect: Effect; cta: string }[] };
+  plan: { id: string; title: string; why: string; actions: string[] }[];
+  wins: string[];
+  tip: string;
 };
 
-// ---------- Timeline (reuses your existing API) ----------
-type ApiTimelineSession = {
-  workout_id: string;
-  started_at: string;
-  split_name: string | null;
-  tonnage: number | null;
-  sets_count: number | null;
-  tonnage_z: number | null;
-  pre_top_genre: string | null;
-  pre_top_artist: string | null;
-  mood_delta: number | null;
-};
-type ApiTimelineItem = { date: string; sessions: ApiTimelineSession[] };
-type UiSession = {
+type ChipItem = {
   id: string;
-  split: string | null;
-  time: string;
-  tonnage: number | null;
-  sets: number | null;
-  pre: { artist: string | null; genre: string | null };
-  z: number | null;
-  mood_delta: number | null;
+  kind: "music" | "workout" | "time" | "drainer";
+  label: string;
+  effect: Effect;
+  reliability: Reliability;
+  primary: string; // Play / Add to plan / Schedule / Adjust
+  evidence?: string[];
+  recommendation?: string;
 };
-type UiTimelineItem = { date: string; sessions: UiSession[] };
 
-function toUiTimeline(items: ApiTimelineItem[] | undefined | null): UiTimelineItem[] {
-  if (!items || !Array.isArray(items)) return [];
-  return items.map((d) => ({
-    date: d.date,
-    sessions: (d.sessions || []).map((s) => ({
-      id: s.workout_id,
-      split: s.split_name ?? null,
-      time: s.started_at,
-      tonnage: typeof s.tonnage === "number" ? s.tonnage : null,
-      sets: typeof s.sets_count === "number" ? s.sets_count : null,
-      pre: { artist: s.pre_top_artist ?? null, genre: s.pre_top_genre ?? null },
-      z: typeof s.tonnage_z === "number" ? s.tonnage_z : null,
-      mood_delta: typeof s.mood_delta === "number" ? s.mood_delta : null,
-    })),
-  }));
+function toneToBadge(effect: Effect): { tone: string; text: string } {
+  switch (effect) {
+    case "Big boost":
+      return { tone: "emerald", text: "Big boost" };
+    case "Helps":
+      return { tone: "sky", text: "Helps" };
+    case "Neutral":
+      return { tone: "slate", text: "Neutral" };
+    case "Drains":
+      return { tone: "rose", text: "Drains" };
+  }
+  return { tone: "slate", text: "Neutral" };
 }
 
-// ---------- Small helpers ----------
-function fmtDelta(x?: number | null) {
-  if (x == null || isNaN(x as any)) return "—";
-  const sign = (x as number) > 0 ? "+" : "";
-  return `${sign}${(x as number).toFixed(2)}`;
-}
-function fmtDate(iso: string) {
-  const d = new Date(iso);
-  return d.toLocaleDateString();
-}
-function fmtTime(iso: string) {
-  const d = new Date(iso);
-  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+function reliabilityTone(r: Reliability): string {
+  if (r === "Consistent") return "emerald";
+  if (r === "Often") return "amber";
+  return "slate";
 }
 
-// ---------- Bubble component (inline for simplicity) ----------
-function BubbleRow({
-  title,
-  items,
-  colorMode = "impact",
-  emptyText,
-  onPick,
-}: {
-  title: string;
-  items: LabelImpact[];
-  colorMode?: "impact";
-  emptyText?: string;
-  onPick?: (label: string) => void;
-}) {
-  const top = items.slice(0, 6);
+function useFaceliftData() {
+  const [data, setData] = React.useState<FaceliftData | null>(null);
+  const [loading, setLoading] = React.useState(true);
+  const [error, setError] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    let isMounted = true;
+    (async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const { data: session } = await supabase.auth.getSession();
+        const token = session.session?.access_token;
+        const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
+        const r = await fetch("/api/insights/facelift", { cache: "no-store", headers });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const json = (await r.json()) as FaceliftData;
+        if (isMounted) setData(json);
+      } catch (e: any) {
+        setError(e?.message || String(e));
+      } finally {
+        if (isMounted) setLoading(false);
+      }
+    })();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+  return { data, loading, error };
+}
+
+function SectionHeader({ title }: { title: string }) {
+  return <h2 className="sr-only">{title}</h2>;
+}
+
+function Chip({ item, onOpen }: { item: ChipItem; onOpen: (it: ChipItem) => void }) {
+  const eff = toneToBadge(item.effect);
   return (
-    <section className="rounded-xl border bg-white p-4">
-      <div className="mb-2 font-medium">{title}</div>
-      {top.length === 0 ? (
-        <div className="text-sm text-gray-500">{emptyText || "Not enough data yet."}</div>
-      ) : (
-        <div className="flex flex-wrap gap-2">
-          {top.map((x) => {
-            const positive = x.impact >= 0;
-            const intensity = Math.min(1, Math.abs(x.impact) / 1.0); // clamp around 1 SD
-            const hue = positive ? 150 : 0; // green/red
-            const bg = `hsl(${hue} 80% ${92 - 28 * intensity}%)`;
-            const ring = `hsl(${hue} 60% ${70 - 10 * intensity}%)`;
-            const size = Math.min(1, Math.max(0.35, x.n / 12)); // bubble size by n (cap)
-            return (
-              <button
-                key={x.label}
-                className="rounded-full px-3 py-2 border text-sm"
-                style={{ background: bg, borderColor: ring, transform: `scale(${0.85 + 0.3 * size})` }}
-                onClick={() => onPick?.(x.label)}
-                title={`${x.label}: impact ${fmtDelta(x.impact)} · n=${x.n}`}
-              >
-                <span className="font-medium">{x.label}</span>{" "}
-                <span className="text-gray-700">{fmtDelta(x.impact)}</span>
-                <span className="text-gray-500"> · {x.n}</span>
-              </button>
-            );
-          })}
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={() => onOpen(item)}
+      onKeyDown={(e) => e.key === "Enter" && onOpen(item)}
+      className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+      aria-label={`${item.label} — ${item.effect} · ${item.reliability}`}
+    >
+      <Badge tone={eff.tone}>{eff.text}</Badge>
+      <Badge tone={reliabilityTone(item.reliability)}>{item.reliability}</Badge>
+      <span className="text-sm">{item.label}</span>
+      <span className="ml-auto text-xs text-white/70">{item.primary}</span>
+    </div>
+  );
+}
+
+function WeekStrip({ best, onPick }: { best: string[]; onPick: (slot: string) => void }) {
+  const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  return (
+    <div className="grid grid-cols-7 gap-2">
+      {days.map((d, i) => {
+        const slot = best[i % Math.max(1, best.length)] || "18:00";
+        const isBest = i < 2;
+        return (
+          <button
+            key={d}
+            className="flex h-12 flex-col items-center justify-center rounded-md border border-white/10 bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+            aria-label={`Schedule ${d} at ${slot}`}
+            onClick={() => onPick(`${d} ${slot}`)}
+          >
+            <span className="text-xs text-white/70">{d}</span>
+            <span className={`mt-1 h-2 w-2 rounded-full ${isBest ? "bg-emerald-400" : "bg-white/30"}`} />
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function PlanCard({ title, why, onAction, onFeedback }: { title: string; why: string; onAction: (action: string) => void; onFeedback: (verdict: "keep" | "not_for_me", reason?: string) => void }) {
+  const { toast } = useToast();
+  const [askingReason, setAskingReason] = React.useState(false);
+  const [reason, setReason] = React.useState("");
+  return (
+    <Card className="space-y-2">
+      <CardContent className="space-y-2 py-3">
+        <div className="flex items-start gap-2">
+          <div className="mt-0.5 inline-flex h-7 w-7 items-center justify-center rounded-md bg-violet-500/15 text-violet-300 ring-1 ring-white/10">
+            <CalendarDays className="h-4 w-4" />
+          </div>
+          <div>
+            <div className="text-sm font-medium">{title}</div>
+            <div className="text-sm text-white/80">Why: {why}</div>
+          </div>
         </div>
+        <div className="flex flex-wrap gap-2">
+          {[
+            { label: "Add to calendar" },
+            { label: "Start playlist" },
+            { label: "Auto-log template" },
+          ].map((a) => (
+            <Button key={a.label} variant={a.label === "Add to calendar" ? "default" : "outline"} size="sm" onClick={() => onAction(a.label)}>
+              {a.label}
+            </Button>
+          ))}
+        </div>
+        {!askingReason ? (
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="outline" onClick={async () => { onFeedback("keep"); toast({ title: "Saved", description: "We’ll show more like this." }); }}>Keep</Button>
+            <Button size="sm" variant="outline" onClick={() => setAskingReason(true)}>Not for me</Button>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            <label className="block text-xs text-white/70">Reason (required)</label>
+            <select className="w-full rounded-md border border-white/10 bg-transparent px-2 py-1 text-sm"
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+            >
+              <option value="">Select…</option>
+              <option value="wrong time">wrong time</option>
+              <option value="too hard">too hard</option>
+              <option value="don’t like music">don’t like music</option>
+              <option value="other">other</option>
+            </select>
+            <div className="flex gap-2">
+              <Button size="sm" onClick={() => { if (!reason) return; onFeedback("not_for_me", reason); setAskingReason(false); setReason(""); toast({ title: "Thanks", description: "We’ll adjust future plans." }); }}>Submit</Button>
+              <Button size="sm" variant="ghost" onClick={() => { setAskingReason(false); setReason(""); }}>Cancel</Button>
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function FaceliftInner() {
+  const { data, loading, error } = useFaceliftData();
+  const [sheetOpen, setSheetOpen] = React.useState(false);
+  const [sheetTitle, setSheetTitle] = React.useState("");
+  const [sheetLines, setSheetLines] = React.useState<string[]>([]);
+  const [activeChip, setActiveChip] = React.useState<ChipItem | null>(null);
+  const [detailsOn, setDetailsOn] = React.useState<boolean>(() => {
+    try { return localStorage.getItem("insights.details") === "1"; } catch { return false; }
+  });
+  const router = useRouter();
+
+  React.useEffect(() => {
+    try { localStorage.setItem("insights.details", detailsOn ? "1" : "0"); } catch {}
+    (async () => {
+      try {
+        const { data: session } = await supabase.auth.getSession();
+        const token = session.session?.access_token;
+        const headers = token ? { Authorization: `Bearer ${token}`, "Content-Type": "application/json" } : { "Content-Type": "application/json" };
+        const { prefs } = await fetch("/api/preferences", { headers }).then((r) => r.json());
+        const next = { ...(prefs || {}), insights_details: detailsOn };
+        await fetch("/api/preferences", { method: "POST", headers, body: JSON.stringify({ prefs: next }) });
+        await fetch("/api/analytics", { method: "POST", headers, body: JSON.stringify({ event: "details_toggled", payload: { enabled: detailsOn } }) });
+      } catch {}
+    })();
+  }, [detailsOn]);
+
+  function openChipEvidence(it: ChipItem) {
+    setSheetTitle(it.label);
+    setSheetLines((it.evidence || []).slice(0, 5).concat([it.recommendation || ""]));
+    setActiveChip(it);
+    setSheetOpen(true);
+  }
+
+  async function logEvent(event: string, payload?: any) {
+    try {
+      const { data: session } = await supabase.auth.getSession();
+      const token = session.session?.access_token;
+      const headers = token ? { Authorization: `Bearer ${token}`, "Content-Type": "application/json" } : { "Content-Type": "application/json" };
+      await fetch("/api/analytics", { method: "POST", headers, body: JSON.stringify({ event, payload }) });
+    } catch {}
+  }
+  async function sendFeedback(plan_id: string, verdict: "keep" | "not_for_me", reason?: string) {
+    try {
+      const { data: session } = await supabase.auth.getSession();
+      const token = session.session?.access_token;
+      const headers = token ? { Authorization: `Bearer ${token}`, "Content-Type": "application/json" } : { "Content-Type": "application/json" };
+      await fetch("/api/plan-feedback", { method: "POST", headers, body: JSON.stringify({ plan_id, verdict, reason }) });
+      await logEvent("feedback_submitted", { id: plan_id, verdict, reason });
+    } catch {}
+  }
+  function addToCalendar(title: string) {
+    const dtStart = new Date(); dtStart.setDate(dtStart.getDate() + 1);
+    const dtEnd = new Date(dtStart.getTime() + 60 * 60 * 1000);
+    const fmt = (d: Date) => d.toISOString().replace(/[-:]/g, "").split(".")[0] + "Z";
+    const ics = ["BEGIN:VCALENDAR","VERSION:2.0","BEGIN:VEVENT",`DTSTART:${fmt(dtStart)}`,`DTEND:${fmt(dtEnd)}`,`SUMMARY:${title}`,"END:VEVENT","END:VCALENDAR"].join("\r\n");
+    const blob = new Blob([ics], { type: "text/calendar" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = "plan.ics"; a.click(); setTimeout(() => URL.revokeObjectURL(url), 500);
+  }
+
+  if (loading) {
+    return (
+      <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 space-y-6">
+        <div className="h-24 animate-pulse rounded-xl bg-white/5" />
+        <div className="h-28 animate-pulse rounded-xl bg-white/5" />
+        <div className="h-24 animate-pulse rounded-xl bg-white/5" />
+      </div>
+    );
+  }
+  if (error || !data) {
+    return <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 text-sm text-white/80">Failed to load insights.</div>;
+  }
+
+  const { weeklySummary, chips, best, plan, wins, tip, states } = data;
+  const showSimple = states.newUser;
+
+  return (
+    <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 space-y-6">
+      <SectionHeader title="Weekly Summary" />
+      <Card>
+        <CardContent className="space-y-3 py-3">
+          <div className="text-base">{weeklySummary.line1}</div>
+          <div className="text-base">{weeklySummary.line2}</div>
+          <div className="flex flex-wrap gap-2">
+            {weeklySummary.actions
+              .filter((a: any) => states.musicConnected || a.label !== "Start booster playlist")
+              .map((a: any) => (
+                <Button
+                  key={a.id}
+                  onClick={() => {
+                    if (a.href) window.open(a.href, "_blank");
+                    if (a.target) { const el = document.querySelector(a.target) as HTMLElement | null; if (el) el.scrollIntoView({ behavior: "smooth", block: "start" }); }
+                    if (a.label === "See why") { setSheetTitle("Why these suggestions"); setSheetLines(weeklySummary.evidence.slice(0, 5)); setActiveChip(null); setSheetOpen(true); }
+                    logEvent("summary_action_clicked", { action: a.id });
+                  }}
+                  variant={a.primary ? "default" : "outline"}
+                  size="sm"
+                >
+                  {a.label}
+                </Button>
+              ))}
+          </div>
+        </CardContent>
+      </Card>
+
+      {states.lowData && (
+        <div className="rounded-md border border-amber-300/30 bg-amber-500/10 px-3 py-2 text-sm">Log mood after workouts to sharpen insights.</div>
       )}
-    </section>
+
+      {showSimple ? (
+        <Card>
+          <CardContent className="space-y-3 py-3">
+            <div className="text-base">Try two evening Push sessions with Hip-Hop.</div>
+            <Button size="sm" onClick={() => { (async () => { await logEvent("summary_action_clicked", { action: "add_two_evening_push" }); })(); }}>Add both</Button>
+          </CardContent>
+        </Card>
+      ) : (
+        <>
+          <SectionHeader title="What Helps" />
+          <Card>
+            <CardContent className="space-y-3 py-3">
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                {chips.boosters.slice(0, 3).filter((c) => { try { const until = Number(localStorage.getItem(`chip.cooldown.${c.id}`) || 0); return !until || Date.now() > until; } catch { return true; } }).map((c) => (
+                  <Chip key={c.id} item={c} onOpen={(it) => openChipEvidence(it)} />
+                ))}
+                {chips.drainers.slice(0, 2).filter((c) => { try { const until = Number(localStorage.getItem(`chip.cooldown.${c.id}`) || 0); return !until || Date.now() > until; } catch { return true; } }).map((c) => (
+                  <Chip key={c.id} item={c} onOpen={(it) => openChipEvidence(it)} />
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+
+          <SectionHeader title="Best Times & Pairings" />
+          <Card>
+            <CardContent className="space-y-3 py-3">
+              <WeekStrip best={best.slots} onPick={(slot) => { (async () => { await logEvent("chip_primary_action", { id: `time:${slot}`, action: "Schedule" }); })(); }} />
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                {best.pairings.slice(0, 3).map((p) => (
+                  <div key={p.id} className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2">
+                    <div className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-violet-500/15 text-violet-300 ring-1 ring-white/10"><Music2 className="h-4 w-4" /></div>
+                    <span className="text-sm">{p.label}</span>
+                    <Badge tone={toneToBadge(p.effect).tone} className="ml-auto">{p.effect}</Badge>
+                    <Button size="sm" variant="outline" onClick={() => { (async () => { await logEvent("chip_primary_action", { id: p.id, action: "use_pairing" }); })(); }}>Use this</Button>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+
+          <SectionHeader title="Your Next 7 Days" />
+          <div id="plan" className="space-y-3">
+            {plan.slice(0, 3).map((p) => (
+              <PlanCard
+                key={p.id}
+                title={p.title}
+                why={p.why}
+                onAction={(a) => {
+                  if (a === "Add to calendar") addToCalendar(p.title);
+                  if (a === "Start playlist") window.open("https://open.spotify.com/search/Booster%20Mix", "_blank");
+                  if (a === "Auto-log template") (async () => { await logEvent("plan_action", { id: p.id, action: a }); })();
+                }}
+                onFeedback={(v, r) => sendFeedback(p.id, v, r)}
+              />
+            ))}
+          </div>
+        </>
+      )}
+
+      <SectionHeader title="Small Wins & Tips" />
+      <Card>
+        <CardContent className="space-y-2 py-3">
+          <ul className="list-disc pl-5 text-sm text-white/90">
+            {wins.slice(0, 2).map((w, i) => (
+              <li key={i}>{w}</li>
+            ))}
+          </ul>
+          <div className="text-sm text-white/80">Tip: {tip}</div>
+        </CardContent>
+      </Card>
+
+      <Sheet open={sheetOpen} onOpenChange={setSheetOpen} title={sheetTitle}>
+        <div className="space-y-2">
+          {(sheetLines || []).slice(0, 5).map((line, i) => (
+            <div key={i} className="text-sm">{line}</div>
+          ))}
+          {activeChip && (
+            <div className="mt-2 flex items-center gap-2">
+              <Button size="sm" onClick={() => {
+                const it = activeChip; if (!it) return;
+                if (it.kind === "music") window.open(`https://open.spotify.com/search/${encodeURIComponent(it.label)}`, "_blank");
+                if (it.kind === "workout" || it.kind === "time") { const el = document.querySelector('#plan'); if (el) el.scrollIntoView({ behavior: 'smooth' }); }
+                try { localStorage.setItem(`chip.cooldown.${it.id}`, String(Date.now() + 7*24*3600*1000)); } catch {}
+              }}>{activeChip.primary}</Button>
+              <button className="text-xs underline" onClick={() => setSheetOpen(false)}>Close</button>
+            </div>
+          )}
+          <button className="mt-2 text-sm underline underline-offset-2" onClick={() => router.push("/timeline")}>Open on timeline</button>
+          <div className="mt-3">
+            <label className="inline-flex items-center gap-2 text-xs">
+              <input type="checkbox" checked={detailsOn} onChange={(e) => setDetailsOn(e.target.checked)} />
+              Details
+            </label>
+          </div>
+        </div>
+      </Sheet>
+    </div>
   );
 }
 
 export default function InsightsPage() {
-  const [days, setDays] = useState(30);
-  const [split, setSplit] = useState<string | null>(null);
-
-  const [summary, setSummary] = useState<SummaryOut | null>(null);
-  const [timeline, setTimeline] = useState<UiTimelineItem[] | null>(null);
-  const [loading, setLoading] = useState(false);
-
-  const filtersQS = useMemo(() => {
-    const p = new URLSearchParams();
-    p.set("days", String(days));
-    if (split) p.set("split", split);
-    return p.toString();
-  }, [days, split]);
-
-  useEffect(() => {
-    (async () => {
-      setLoading(true);
-      const { data: session } = await supabase.auth.getSession();
-      const token = session.session?.access_token;
-      const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
-
-      const [s, t] = await Promise.all([
-        fetch(`/api/insights/summary?${filtersQS}`, { headers }).then((r) => r.json()),
-        fetch(`/api/insights/timeline?${filtersQS}`, { headers }).then((r) => r.json()),
-      ]);
-
-      setSummary(s?.error ? null : (s as SummaryOut));
-      setTimeline(t?.error ? [] : toUiTimeline(t?.items as ApiTimelineItem[]).slice(0, 5)); // short digest
-      setLoading(false);
-    })();
-  }, [filtersQS]);
-
-  // simple ICS generator for best-time schedule
-  const icsHref = (() => {
-    const bt = summary?.headline?.best_time;
-    if (!bt) return null;
-    // crude DTSTART: today at start of window's first hour (parse "17–20")
-    const m = /^(\d{2})/.exec(bt.window);
-    const hour = m ? Number(m[1]) : 17;
-    const today = new Date();
-    today.setHours(hour, 0, 0, 0);
-    const pad = (n: number) => String(n).padStart(2, "0");
-    const dt = `${today.getFullYear()}${pad(today.getMonth() + 1)}${pad(today.getDate())}T${pad(today.getHours())}0000`;
-    const ics = [
-      "BEGIN:VCALENDAR",
-      "VERSION:2.0",
-      "PRODID:-//Soundmind//Insights//EN",
-      "BEGIN:VEVENT",
-      `DTSTART:${dt}`,
-      "RRULE:FREQ=WEEKLY",
-      "SUMMARY:Train at your best time",
-      "END:VEVENT",
-      "END:VCALENDAR",
-    ].join("\r\n");
-    return `data:text/calendar;charset=utf-8,${encodeURIComponent(ics)}`;
-  })();
-
   return (
-    <div className="p-4 md:p-6 space-y-6">
-      <div className="flex items-center gap-3 flex-wrap">
-        <h1 className="text-2xl font-semibold">Insights</h1>
-        <div className="ml-auto flex items-center gap-2 flex-wrap">
-          <select className="border rounded p-2" value={days} onChange={(e) => setDays(Number(e.target.value))}>
-            <option value={7}>Last 7 days</option>
-            <option value={30}>Last 30 days</option>
-            <option value={90}>Last 90 days</option>
-          </select>
-          <select className="border rounded p-2" value={split ?? ""} onChange={(e) => setSplit(e.target.value || null)}>
-            <option value="">All splits</option>
-            <option>Push</option>
-            <option>Pull</option>
-            <option>Legs</option>
-            <option>Upper</option>
-            <option>Lower</option>
-            <option>Arms</option>
-            <option>Back</option>
-            <option>Full Body</option>
-          </select>
-        </div>
-      </div>
-
-      {/* Hero strip */}
-      <section className="rounded-xl border bg-white p-4">
-        <div className="flex flex-col lg:flex-row gap-3 items-start lg:items-center">
-          <div className="flex items-center gap-3">
-            <div className="text-sm text-gray-600">Last {summary?.filters?.days ?? days} days score</div>
-            <div
-              className="px-3 py-1 rounded-full text-sm"
-              style={{
-                background:
-                  summary?.headline?.score != null
-                    ? `hsl(${(summary.headline.score ?? 0) >= 0 ? 150 : 0} 80% ${92 - 20 * Math.min(1, Math.abs(summary.headline.score ?? 0))}%)`
-                    : "var(--gray-50, #f9fafb)",
-              }}
-            >
-              {fmtDelta(summary?.headline?.score)}
-            </div>
-          </div>
-
-          <div className="flex items-center gap-3">
-            <div className="text-sm text-gray-600">Best time</div>
-            <div className="px-3 py-1 rounded-full text-sm bg-gray-100">
-              {summary?.headline?.best_time ? `${summary.headline.best_time.window} · n=${summary.headline.best_time.n}` : "—"}
-            </div>
-          </div>
-
-          <div className="flex items-center gap-3">
-            <div className="text-sm text-gray-600">Best recipe</div>
-            <div className="px-3 py-1 rounded-full text-sm bg-gray-100">
-              {summary?.headline?.recipe
-                ? `${summary.headline.recipe.label}${
-                    summary.headline.recipe.energy ? ` (${summary.headline.recipe.energy})` : ""
-                  } · ${fmtDelta(summary.headline.recipe.impact)} · n=${summary.headline.recipe.n}`
-                : "—"}
-            </div>
-          </div>
-
-          <div className="ml-auto text-sm text-gray-600">{summary?.headline?.copy?.line || ""}</div>
-        </div>
-
-        {/* Action buttons */}
-        <div className="mt-3 flex gap-2">
-          {summary?.recommendations?.play_url && (
-            <a
-              href={summary.recommendations.play_url}
-              target="_blank"
-              rel="noreferrer"
-              className="px-3 py-2 rounded-lg border bg-black text-white text-sm"
-            >
-              Play boosters on Spotify
-            </a>
-          )}
-          {icsHref && (
-            <a href={icsHref} download="soundmind-best-time.ics" className="px-3 py-2 rounded-lg border text-sm">
-              Schedule best time
-            </a>
-          )}
-          <span className="ml-auto text-xs text-gray-500">{summary?.recommendations?.notes || ""}</span>
-        </div>
-      </section>
-
-      {/* Boosters / Drainers */}
-      <BubbleRow
-        title="Boosting genres"
-        items={summary?.boosters?.genres || []}
-        onPick={() => {}}
-        emptyText="Log a few more sessions with music to surface winners."
-      />
-      <BubbleRow title="Boosting artists" items={summary?.boosters?.artists || []} />
-      <BubbleRow title="Draining genres" items={summary?.drainers?.genres || []} />
-      <BubbleRow title="Draining artists" items={summary?.drainers?.artists || []} />
-
-      {/* Digest (short) */}
-      <section className="rounded-xl border bg-white p-4">
-        <div className="font-medium mb-2">Recent sessions (digest)</div>
-        <div className="space-y-3">
-          {timeline?.length ? (
-            timeline.map((d) => (
-              <div key={d.date} className="rounded border p-3">
-                <div className="text-sm font-medium mb-2">{fmtDate(d.date)}</div>
-                <div className="space-y-2">
-                  {d.sessions.map((s) => (
-                    <div key={s.id} className="flex items-center gap-3 text-sm">
-                      <span className="px-2 py-1 rounded bg-gray-100">{s.split || "—"}</span>
-                      <span>{fmtTime(s.time)}</span>
-                      <span className={`${(s.z ?? 0) > 0 ? "text-green-700" : (s.z ?? 0) < 0 ? "text-red-700" : "text-gray-600"}`}>
-                        workout {fmtDelta(s.z)}
-                      </span>
-                      <span className={`ml-auto ${ (s.mood_delta ?? 0) > 0 ? "text-green-700" : (s.mood_delta ?? 0) < 0 ? "text-red-700" : "text-gray-600"}`}>
-                        mood {fmtDelta(s.mood_delta)}
-                      </span>
-                      <span className="text-gray-700">
-                        {s.pre?.artist ? `${s.pre.artist}${s.pre?.genre ? ` · ${s.pre.genre}` : ""}` : s.pre?.genre || "—"}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ))
-          ) : (
-            <div className="text-sm text-gray-500">No sessions in range.</div>
-          )}
-        </div>
-      </section>
-
-      {loading && <div className="text-sm text-gray-500">Updating…</div>}
-    </div>
+    <ToastProvider>
+      <FaceliftInner />
+      <Toaster />
+    </ToastProvider>
   );
-} 
+}
