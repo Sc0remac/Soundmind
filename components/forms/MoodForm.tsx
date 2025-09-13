@@ -26,15 +26,15 @@ export default function MoodForm() {
     setLoading(true);
     setMessage(null);
     try {
-      const logged_at = new Date(`${date}T${time}:00`);
+      const created_at = new Date(`${date}T${time}:00`);
       const { error } = await supabase.from("moods").insert({
-        mood_score: mood,
+        score: mood,
         energy,
         stress,
         sleep_hours: sleep,
-        tags: labelTags,
+        contexts: labelTags,
         journal,
-        logged_at,
+        created_at,
       });
       if (error) throw error;
       setMessage("Mood saved");
