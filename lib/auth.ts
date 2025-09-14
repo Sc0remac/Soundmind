@@ -2,9 +2,30 @@
 import { createClient } from "@supabase/supabase-js";
 
 export function getBearerFromRequest(req: Request): string | null {
+  // 1) Standard Authorization header
   const a = req.headers.get("authorization") || req.headers.get("Authorization") || "";
   const m = a.match(/^Bearer\s+(.+)$/i);
-  return m ? m[1] : null;
+  if (m) return m[1];
+
+  // 2) Fallback: look for Supabase auth cookie in the Cookie header
+  // Cookie name shape: sb-<project-ref>-auth-token
+  const cookieHeader = req.headers.get("cookie") || req.headers.get("Cookie") || "";
+  if (cookieHeader) {
+    try {
+      const parts = cookieHeader.split(/;\s*/);
+      const authCookie = parts.find((p) => /sb-.*-auth-token=/.test(p));
+      if (authCookie) {
+        const raw = decodeURIComponent(authCookie.split("=").slice(1).join("="));
+        // Cookie value is a JSON string: { access_token, refresh_token, ... }
+        const parsed = JSON.parse(raw);
+        if (parsed?.access_token && typeof parsed.access_token === "string") return parsed.access_token;
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  return null;
 }
 
 function getEnv() {

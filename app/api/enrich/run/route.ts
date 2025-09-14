@@ -25,11 +25,12 @@ export async function POST(req: Request) {
       cache: "no-store",
     });
     const status = r.status;
+    const text = await r.text();
     let json: any = null;
     try {
-      json = await r.json();
+      json = JSON.parse(text);
     } catch {
-      json = { text: await r.text() };
+      json = { text };
     }
     return { status, json };
   }
