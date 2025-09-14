@@ -4,6 +4,7 @@ import { supabase } from "@/lib/supabaseClient";
 import { Card, CardBody, CardHeader, Button } from "@nextui-org/react";
 import { User as UserIcon, Music2, Activity, Brain, CheckCircle2 } from "lucide-react";
 import Link from "next/link";
+import ProfileForm from "@/components/forms/ProfileForm";
 
 export default function ProfilePage() {
   const [userEmail, setUserEmail] = useState<string | null>(null);
@@ -109,6 +110,11 @@ export default function ProfilePage() {
           <Button as={Link} href="/insights" variant="flat">Insights</Button>
         </CardBody>
       </Card>
+
+      {/* Profile details form spans full width on md+ */}
+      <div className="md:col-span-2">
+        <ProfileForm />
+      </div>
     </main>
   );
 }
