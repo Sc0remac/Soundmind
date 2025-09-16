@@ -9,18 +9,6 @@ type DeezerTrack = {
   genres?: string[];
 };
 
-async function fetchDeezerByISRC(isrc: string): Promise<DeezerTrack | null> {
-  // Undocumented but widely used endpoint: /track/isrc:<ISRC>
-  const url = `https://api.deezer.com/track/isrc:${encodeURIComponent(isrc)}`;
-  const res = await fetch(url);
-  if (!res.ok) return null;
-  const json = await res.json();
-  if (json && json.id) {
-    return { id: json.id, bpm: json.bpm, gain: json.gain };
-  }
-  return null;
-}
-
 async function fetchDeezerTrack(
   isrc: string,
   existingId?: string | null
@@ -41,8 +29,8 @@ async function fetchDeezerTrack(
       const albumRes = await fetch(`https://api.deezer.com/album/${albumId}`);
       if (albumRes.ok) {
         const albumJson = await albumRes.json();
-        const data = albumJson?.genres?.data || [];
-        genres = data.map((g: any) => g.name).filter(Boolean);
+        const data = (albumJson?.genres?.data || []) as Array<{ name?: string }>;
+        genres = data.map((g) => g.name).filter(Boolean) as string[];
       }
     } catch {
       /* ignore */
@@ -79,7 +67,18 @@ export async function POST() {
   }
 
   let updated = 0;
-  for (const r of rows as any[]) {
+  for (const r of (rows || []) as Array<{
+    id: string;
+    name: string | null;
+    isrc: string | null;
+    tempo: number | null;
+    bpm: number | null;
+    gain: number | null;
+    genre_primary: string | null;
+    genre_tags: string[] | null;
+    deezer_track_id: string | null;
+    meta_provider: Record<string, unknown> | null;
+  }>) {
     if (!r.isrc) continue;
     try {
       const d = await fetchDeezerTrack(r.isrc, r.deezer_track_id);
@@ -89,7 +88,18 @@ export async function POST() {
         ? Array.from(new Set([...(r.genre_tags || []), ...d.genres]))
         : r.genre_tags;
 
-      const patch: any = {
+      const patch: {
+        id: string;
+        name: string | null;
+        deezer_track_id: string | null | undefined;
+        tempo: number | null | undefined;
+        bpm: number | null | undefined;
+        gain: number | null | undefined;
+        genre_primary: string | null | undefined;
+        genre_tags: string[] | null | undefined;
+        last_enriched_at: string;
+        meta_provider: Record<string, unknown>;
+      } = {
         // include name so upsert doesn't trip NOT NULL
         id: r.id,
         name: r.name,

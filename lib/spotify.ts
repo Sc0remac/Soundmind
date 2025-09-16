@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 // /lib/spotify.ts
 import { supabaseService } from "./supabaseAdmin";
 

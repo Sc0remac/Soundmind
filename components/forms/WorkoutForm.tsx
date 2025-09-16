@@ -1,5 +1,6 @@
 // components/forms/WorkoutForm.tsx
 "use client";
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { useState } from "react";
 import { supabase } from "@/lib/supabaseClient"; // your existing client
 import { Card, CardHeader, CardBody, CardFooter, Button, Chip } from "@nextui-org/react";

@@ -16,7 +16,8 @@ export async function GET(
     .eq("split_id", splitId)
     .eq("is_global", true);
 
-  return NextResponse.json({ body_part_ids: (data ?? []).map((r: any) => r.body_part_id) });
+  type Row = { body_part_id: string };
+  return NextResponse.json({ body_part_ids: (data as Row[] | null | undefined)?.map((r) => r.body_part_id) ?? [] });
 }
 
 export async function PUT(

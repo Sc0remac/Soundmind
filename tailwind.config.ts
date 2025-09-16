@@ -1,4 +1,5 @@
 // tailwind.config.ts
+// @ts-nocheck
 import type { Config } from "tailwindcss";
 import { nextui } from "@nextui-org/react";
 

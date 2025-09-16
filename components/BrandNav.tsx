@@ -21,7 +21,7 @@ import {
 
 const items = [
   { href: "/log-workout", label: "Log Workout", icon: NotebookPen },
-  { href: "/log-mood", label: "Log Mood", icon: SmilePlus },
+  { href: "/mood/new", label: "Log Mood", icon: SmilePlus },
   { href: "/timeline", label: "Timeline", icon: CalendarClock },
   { href: "/music", label: "Music", icon: Music2 },
   { href: "/insights", label: "Insights", icon: BarChart3 },
@@ -73,4 +73,5 @@ export default function BrandNav() {
       </NavbarContent>
     </Navbar>
   );
-}   
+}
+

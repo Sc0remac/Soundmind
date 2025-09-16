@@ -14,6 +14,12 @@ const nextConfig = {
       { protocol: 'https', hostname: 'i.ytimg.com' },
     ],
   },
+  async redirects() {
+    return [
+      { source: '/log-mood', destination: '/mood/new', permanent: true },
+      { source: '/log-mood/:path*', destination: '/mood/new', permanent: true },
+    ];
+  },
 };
 
 module.exports = nextConfig;

@@ -1,5 +1,5 @@
 // lib/supabaseAdmin.ts
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -19,4 +19,6 @@ export function supabaseService() {
 }
 
 // Convenience singleton for callers that just need a client instance.
-export const supabaseAdmin = usingServiceRole ? supabaseService() : (null as any);
+export const supabaseAdmin: SupabaseClient = usingServiceRole
+  ? supabaseService()
+  : (null as unknown as SupabaseClient);

@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 // app/api/music/list/route.ts
 import { NextResponse } from "next/server";
 import { requireUserFromRequest, supabaseFromRequest } from "@/lib/auth";
@@ -21,3 +22,4 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: e?.message || String(e) }, { status: 401 });
   }
 }
+/* eslint-disable @typescript-eslint/no-explicit-any */

@@ -1,7 +1,8 @@
 // app/timeline/page.tsx
 "use client";
+export const dynamic = "force-dynamic";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -214,7 +215,7 @@ function linkMoodToWorkout(m: UiMood, workouts: UiWorkout[]): UiMood {
 }
 
 // -------- Page --------
-export default function TimelinePage() {
+function TimelineInner() {
   const router = useRouter();
   const sp = useSearchParams();
   const [days, setDays] = useState<ApiDay[]>([]);
@@ -499,6 +500,7 @@ export default function TimelinePage() {
   }
 
   return (
+    <Suspense fallback={<div className="text-sm text-white/70">Loading…</div>}>
     <div className="space-y-4">
       {/* Toolbar */}
       <div className="flex flex-wrap items-center gap-2 rounded-xl border border-white/10 bg-white/5 p-2">
@@ -566,7 +568,7 @@ export default function TimelinePage() {
           </select>
         </div>
         <div className="flex items-center gap-1">
-          <Button as={Link} href="/log-mood" size="sm" color="success" variant="flat" startContent={<Plus className="size-4" />}>Mood</Button>
+          <Button as={Link} href="/mood/new" size="sm" color="success" variant="flat" startContent={<Plus className="size-4" />}>Mood</Button>
           <Button as={Link} href="/log-workout" size="sm" color="primary" variant="flat" startContent={<Plus className="size-4" />}>Workout</Button>
         </div>
       </div>
@@ -578,7 +580,7 @@ export default function TimelinePage() {
         <div className="rounded-xl border border-white/10 bg-white/5 p-6 text-sm text-white/80">
           <div className="mb-3 text-base font-medium">No data in range</div>
           <div className="flex flex-wrap items-center gap-2">
-            <Button as={Link} href="/log-mood" size="sm" variant="flat">+ Mood</Button>
+            <Button as={Link} href="/mood/new" size="sm" variant="flat">+ Mood</Button>
             <Button as={Link} href="/log-workout" size="sm" variant="flat">+ Workout</Button>
             {connectedSpotify === false && (
               <Button as={Link} href="/music" size="sm" variant="flat">Connect Spotify</Button>
@@ -688,7 +690,7 @@ export default function TimelinePage() {
                       <div className="min-w-0">
                         <div className="truncate text-sm font-medium">{(row as UiBundle).title}</div>
                         {(row as UiBundle).topTrack && (row as UiBundle).count >= 3 && (
-                          <div className="text-xs text-white/60">Top: '{(row as UiBundle).topTrack?.name}' — {(row as UiBundle).topTrack?.artist}</div>
+                          <div className="text-xs text-white/60">Top: &lsquo;{(row as UiBundle).topTrack?.name}&rsquo; — {(row as UiBundle).topTrack?.artist}</div>
                         )}
                       </div>
                       <div className="ml-auto grid grid-cols-3 gap-1">
@@ -720,7 +722,7 @@ export default function TimelinePage() {
       {/* Bundle drawer/sheet */}
       <Modal isOpen={isOpen} onOpenChange={onOpenChange} size="full" backdrop="blur" placement="center" classNames={{ base: "md:max-w-[560px]" }}>
         <ModalContent>
-          {(onClose) => (
+          {(_onClose) => (
             <>
               <ModalHeader className="flex items-center gap-2">
                 <Music2 className="size-4" />
@@ -748,5 +750,14 @@ export default function TimelinePage() {
         </ModalContent>
       </Modal>
     </div>
+    </Suspense>
+  );
+}
+
+export default function TimelinePage() {
+  return (
+    <Suspense fallback={<div className="text-sm text-white/70">Loading…</div>}>
+      <TimelineInner />
+    </Suspense>
   );
 }

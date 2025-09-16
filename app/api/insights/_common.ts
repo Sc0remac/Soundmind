@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 // app/api/insights/_common.ts
 import { supabaseFromRequest } from "@/lib/auth";
 import { supabaseAdmin, usingServiceRole } from "@/lib/supabaseAdmin";

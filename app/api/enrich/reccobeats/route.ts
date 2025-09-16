@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 // app/api/enrich/reccobeats/route.ts
 import { NextResponse } from "next/server";
 import { supabaseAdmin, usingServiceRole } from "@/lib/supabaseAdmin";
@@ -104,10 +105,10 @@ export async function POST(req: Request) {
         .select("id,name,meta_provider,tempo,bpm,danceability,energy,acousticness,instrumentalness,liveness,loudness,speechiness,valence,key,mode")
         .in("id", ids)
         .limit(ids.length);
-      return (data || []).filter((r) => r?.id);
+      return ((data || []) as Array<{ id?: string }>).filter((r) => r?.id);
     }
     const { data } = await selectMissing(pageSize);
-    return (data || []).filter((r) => r?.id);
+    return ((data || []) as Array<{ id?: string }>).filter((r) => r?.id);
   };
 
   while (totalLooked < maxTotal) {

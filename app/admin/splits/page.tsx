@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 
 type Split = { id: string; name: string };
@@ -12,22 +12,7 @@ export default function AdminSplits() {
   const [selected, setSelected] = useState<string | null>(null);
   const [checked, setChecked] = useState<Record<string, boolean>>({});
 
-  async function load() {
-    const { data: session } = await supabase.auth.getSession();
-    const token = session.session?.access_token;
-
-    const [s, p] = await Promise.all([
-      fetch("/api/admin/splits", { headers: { Authorization: `Bearer ${token}` } }).then((r) => r.json()),
-      fetch("/api/admin/body-parts", { headers: { Authorization: `Bearer ${token}` } }).then((r) => r.json()),
-    ]);
-    setSplits(s.items || []);
-    setParts(p.items || []);
-    if (s.items?.[0]?.id) selectSplit(s.items[0].id);
-  }
-
-  useEffect(() => { load(); }, []);
-
-  async function selectSplit(id: string) {
+  const selectSplit = useCallback(async function selectSplit(id: string) {
     setSelected(id);
     const { data: session } = await supabase.auth.getSession();
     const token = session.session?.access_token;
@@ -38,7 +23,23 @@ export default function AdminSplits() {
     const map: Record<string, boolean> = {};
     (json.body_part_ids || []).forEach((bp: string) => (map[bp] = true));
     setChecked(map);
-  }
+  }, []);
+
+  const load = useCallback(async function load() {
+    const { data: session } = await supabase.auth.getSession();
+    const token = session.session?.access_token;
+
+    const [s, p] = await Promise.all([
+      fetch("/api/admin/splits", { headers: { Authorization: `Bearer ${token}` } }).then((r) => r.json()),
+      fetch("/api/admin/body-parts", { headers: { Authorization: `Bearer ${token}` } }).then((r) => r.json()),
+    ]);
+    setSplits(s.items || []);
+    setParts(p.items || []);
+    if (s.items?.[0]?.id) selectSplit(s.items[0].id);
+  }, [selectSplit]);
+
+  useEffect(() => { load(); }, [load]);
+  
 
   async function addSplit() {
     const n = name.trim();

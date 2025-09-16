@@ -101,8 +101,8 @@ function Chip({ item, onOpen }: { item: ChipItem; onOpen: (it: ChipItem) => void
       className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
       aria-label={`${item.label} — ${item.effect} · ${item.reliability}`}
     >
-      <Badge tone={eff.tone}>{eff.text}</Badge>
-      <Badge tone={reliabilityTone(item.reliability)}>{item.reliability}</Badge>
+      <Badge tone={eff.tone as any}>{eff.text}</Badge>
+      <Badge tone={reliabilityTone(item.reliability) as any}>{item.reliability}</Badge>
       <span className="text-sm">{item.label}</span>
       <span className="ml-auto text-xs text-white/70">{item.primary}</span>
     </div>
@@ -205,7 +205,9 @@ function FaceliftInner() {
       try {
         const { data: session } = await supabase.auth.getSession();
         const token = session.session?.access_token;
-        const headers = token ? { Authorization: `Bearer ${token}`, "Content-Type": "application/json" } : { "Content-Type": "application/json" };
+        const headers: Record<string, string> = token
+          ? { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }
+          : { "Content-Type": "application/json" };
         const { prefs } = await fetch("/api/preferences", { headers }).then((r) => r.json());
         const next = { ...(prefs || {}), insights_details: detailsOn };
         await fetch("/api/preferences", { method: "POST", headers, body: JSON.stringify({ prefs: next }) });
@@ -225,7 +227,9 @@ function FaceliftInner() {
     try {
       const { data: session } = await supabase.auth.getSession();
       const token = session.session?.access_token;
-      const headers = token ? { Authorization: `Bearer ${token}`, "Content-Type": "application/json" } : { "Content-Type": "application/json" };
+      const headers: Record<string, string> = token
+        ? { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }
+        : { "Content-Type": "application/json" };
       await fetch("/api/analytics", { method: "POST", headers, body: JSON.stringify({ event, payload }) });
     } catch {}
   }
@@ -233,7 +237,9 @@ function FaceliftInner() {
     try {
       const { data: session } = await supabase.auth.getSession();
       const token = session.session?.access_token;
-      const headers = token ? { Authorization: `Bearer ${token}`, "Content-Type": "application/json" } : { "Content-Type": "application/json" };
+      const headers: Record<string, string> = token
+        ? { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }
+        : { "Content-Type": "application/json" };
       await fetch("/api/plan-feedback", { method: "POST", headers, body: JSON.stringify({ plan_id, verdict, reason }) });
       await logEvent("feedback_submitted", { id: plan_id, verdict, reason });
     } catch {}
@@ -327,7 +333,7 @@ function FaceliftInner() {
                   <div key={p.id} className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2">
                     <div className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-violet-500/15 text-violet-300 ring-1 ring-white/10"><Music2 className="h-4 w-4" /></div>
                     <span className="text-sm">{p.label}</span>
-                    <Badge tone={toneToBadge(p.effect).tone} className="ml-auto">{p.effect}</Badge>
+                    <Badge tone={toneToBadge(p.effect).tone as any} className="ml-auto">{p.effect}</Badge>
                     <Button size="sm" variant="outline" onClick={() => { (async () => { await logEvent("chip_primary_action", { id: p.id, action: "use_pairing" }); })(); }}>Use this</Button>
                   </div>
                 ))}

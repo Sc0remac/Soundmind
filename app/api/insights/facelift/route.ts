@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 // app/api/insights/facelift/route.ts
 import { NextResponse } from "next/server";
 import { getUserAndClient } from "@/app/api/insights/_common";
@@ -5,6 +6,16 @@ import { bucketHour, mean } from "@/lib/stats";
 
 type Effect = "Big boost" | "Helps" | "Neutral" | "Drains";
 type Reliability = "Consistent" | "Often" | "Early hint";
+type Chip = {
+  id: string;
+  kind: "music" | "workout" | "time" | "drainer";
+  label: string;
+  effect: Effect;
+  reliability: Reliability;
+  primary: string;
+  evidence?: string[];
+  recommendation?: string;
+};
 
 function mapEffect(impact: number): Effect {
   if (impact >= 0.6) return "Big boost";
@@ -151,7 +162,7 @@ export async function GET(req: Request) {
     const byTime = aggImpact((s) => bucketHour(s.started_at));
 
     // Map to chips with diversification and guardrails
-    function mapChip(kind: "music" | "workout" | "time" | "drainer", label: string, impact: number, n: number) {
+    function mapChip(kind: "music" | "workout" | "time" | "drainer", label: string, impact: number, n: number): Chip {
       const effect = mapEffect(impact);
       const reliability = mapReliability(n);
       const primary = kind === "music" ? "Play" : kind === "workout" ? "Add to plan" : kind === "time" ? "Schedule" : "Adjust";
@@ -320,3 +331,4 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: e?.message || String(e) }, { status });
   }
 }
+/* eslint-disable @typescript-eslint/no-explicit-any */

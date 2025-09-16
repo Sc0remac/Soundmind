@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { supabase } from "@/lib/supabaseClient"; // your existing client
 import { Card, CardHeader, CardBody, CardFooter, Button, Chip } from "@nextui-org/react";
-import { Brain, Heart, Music2, CalendarDays, Sun, Moon, Smile, Meh, Frown, Clock } from "lucide-react";
+import { Brain, Heart, Music2, CalendarDays, Sun, Moon, Clock } from "lucide-react";
 
 const tags = ["Calm", "Focused", "Anxious", "Energised", "Drained", "Stressed", "Optimistic"];
 
@@ -38,8 +38,9 @@ export default function MoodForm() {
       });
       if (error) throw error;
       setMessage("Mood saved");
-    } catch (err: any) {
-      setMessage(err?.message || "Failed to save mood");
+    } catch (err: unknown) {
+      const e = err as { message?: string } | undefined;
+      setMessage((e && e.message) || "Failed to save mood");
     } finally {
       setLoading(false);
     }

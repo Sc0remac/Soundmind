@@ -119,7 +119,7 @@ function scoreTags(tags: LastfmTag[]) {
   const map = new Map<string, number>();
   for (const tag of tags || []) {
     if (!tag?.name) continue;
-    let n = normalizeTag(tag.name);
+    const n = normalizeTag(tag.name);
     if (!n || TAG_STOP.has(n)) continue;
     const w = Math.max(1, Number(tag.count || 1));
     map.set(n, (map.get(n) || 0) + w);
@@ -239,7 +239,7 @@ export async function POST() {
 
   // 3) For each track, call last.fm and update the row
   let updated = 0;
-  const results: any[] = [];
+  const results: Array<{ id: string; track: string; artist: string; topTag: string | null; tagCount: number; updated: boolean; error: string | null }> = [];
 
   for (const tr of trackRows) {
     let artistsForTrack = trackArtists.get(tr.id) || [];
@@ -259,6 +259,9 @@ export async function POST() {
     const genre_primary = top || tr.genre_primary || null;
     const genre_tags = ordered.slice(0, 8);
 
+    const existing = (tr as { meta_provider?: unknown }).meta_provider;
+    const safeMeta: Record<string, unknown> = typeof existing === "object" && existing ? (existing as Record<string, unknown>) : {};
+
     const { error: uErr } = await supabaseAdmin
       .from("spotify_tracks")
       .update({
@@ -268,7 +271,7 @@ export async function POST() {
         derived_valence: valence,
         last_enriched_at: new Date().toISOString(),
         meta_provider: {
-          ...(typeof (tr as any).meta_provider === "object" ? (tr as any).meta_provider : {}),
+          ...safeMeta,
           lastfm: { ok: true, tagsFetched: tags.length, artist, track: tr.name },
         },
       })

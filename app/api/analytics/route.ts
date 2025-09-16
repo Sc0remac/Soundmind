@@ -13,13 +13,13 @@ export async function POST(req: Request) {
     // Best-effort insert; if table doesn't exist, swallow error
     try {
       await client.from("analytics_events").insert({ user_id: userId, event, payload });
-    } catch (e) {
+    } catch {
       // ignore missing table
     }
     return NextResponse.json({ ok: true });
-  } catch (e: any) {
-    const status = e?.status || 500;
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status });
+  } catch (e: unknown) {
+    const err = e as { status?: number; message?: string } | undefined;
+    const status = (err && err.status) || 500;
+    return NextResponse.json({ ok: false, error: (err && err.message) || String(e) }, { status });
   }
 }
-

@@ -41,7 +41,12 @@ async function getUserAccessToken(userId: string, forceRefresh = false) {
 
   if (error || !data) throw new Error("Spotify not connected");
 
-  let { access_token, refresh_token, expires_at } = data as any;
+  const { access_token: initialAccessToken, refresh_token, expires_at } = data as {
+    access_token: string | null;
+    refresh_token: string | null;
+    expires_at: number | null;
+  };
+  let access_token = initialAccessToken;
   const willExpire =
     forceRefresh ||
     (typeof expires_at === "number" ? Date.now() / 1000 > expires_at - 60 : true);
@@ -178,14 +183,14 @@ export async function POST(req: Request) {
       let j;
       try {
         j = await fetchTracksBatch(token, slice);
-      } catch (e: any) {
-        if (String(e).includes("401")) {
-          token = await getUserAccessToken(userId, true);
-          j = await fetchTracksBatch(token, slice);
-        } else {
-          throw e;
-        }
-      }
+  } catch (e: unknown) {
+    if (String(e).includes("401")) {
+      token = await getUserAccessToken(userId, true);
+      j = await fetchTracksBatch(token, slice);
+    } else {
+      throw e;
+    }
+  }
       looked += slice.length;
 
       const { trackMap, artistMap, linkRows } = buildTrackArtistMaps(j.tracks || []);
@@ -195,7 +200,7 @@ export async function POST(req: Request) {
         let art;
         try {
           art = await fetchArtistsBatch(token, artistIds);
-        } catch (e: any) {
+        } catch (e: unknown) {
           if (String(e).includes("401")) {
             token = await getUserAccessToken(userId, true);
             art = await fetchArtistsBatch(token, artistIds);
@@ -236,9 +241,10 @@ export async function POST(req: Request) {
     }
 
     return NextResponse.json({ ok: true, looked_up: looked, updated });
-  } catch (e: any) {
+  } catch (e: unknown) {
+    const err = e as { message?: string } | undefined;
     return NextResponse.json(
-      { ok: false, error: e?.message || String(e) },
+      { ok: false, error: (err && err.message) || String(e) },
       { status: 500 }
     );
   }

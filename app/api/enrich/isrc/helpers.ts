@@ -1,6 +1,30 @@
-export function buildTrackArtistMaps(tracks: any[]) {
-  const trackMap = new Map<string, any>();
-  const artistMap = new Map<string, { id: string; name: string; image_url: string | null; images?: any }>();
+type InTrack = {
+  id: string;
+  name?: string;
+  album?: { name?: string; images?: Array<{ url?: string }> };
+  preview_url?: string | null;
+  duration_ms?: number | null;
+  explicit?: boolean;
+  external_ids?: { isrc?: string };
+  artists?: Array<{ id?: string; name?: string }>;
+};
+
+type OutTrack = {
+  id: string;
+  name: string;
+  album_name: string | null;
+  image_url: string | null;
+  preview_url: string | null;
+  duration_ms: number | null;
+  explicit: boolean | null;
+  isrc: string | null;
+  artist_name: string | null;
+  meta_provider: Record<string, unknown>;
+};
+
+export function buildTrackArtistMaps(tracks: InTrack[]) {
+  const trackMap = new Map<string, OutTrack>();
+  const artistMap = new Map<string, { id: string; name: string; image_url: string | null; images?: Array<{ url?: string }> }>();
   const linkSet = new Set<string>();
   const linkRows: { track_id: string; artist_id: string }[] = [];
 
@@ -18,7 +42,7 @@ export function buildTrackArtistMaps(tracks: any[]) {
       explicit: typeof t.explicit === "boolean" ? t.explicit : null,
       isrc: t.external_ids?.isrc || null,
       artist_name: Array.isArray(t.artists)
-        ? t.artists.map((a: any) => a.name).filter(Boolean).join(", ")
+        ? t.artists.map((a) => a.name || "").filter(Boolean).join(", ")
         : null,
       meta_provider: { spotify_track: true },
     });
@@ -42,7 +66,7 @@ export function buildTrackArtistMaps(tracks: any[]) {
 }
 
 export function mergeArtistImages(
-  artistMap: Map<string, { id: string; name: string; image_url: string | null; images?: any }>,
+  artistMap: Map<string, { id: string; name: string; image_url: string | null; images?: Array<{ url?: string }> }>,
   artists: Array<{ id: string; images?: Array<{ url: string }> }>
 ) {
   artists?.forEach((ar) => {

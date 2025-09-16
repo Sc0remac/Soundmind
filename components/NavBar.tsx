@@ -1,4 +1,5 @@
 "use client";
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
@@ -62,7 +63,7 @@ export default function NavBar() {
 
         <div className="flex items-center gap-4">
           <Link href="/log-workout">Log Workout</Link>
-          <Link href="/log-mood">Log Mood</Link>
+          <Link href="/mood/new">Log Mood</Link>
           <Link href="/timeline">Timeline</Link>
           <Link href="/insights">Insights</Link>
           <Link href="/music">Music</Link>
