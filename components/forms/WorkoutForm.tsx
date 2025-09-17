@@ -58,28 +58,46 @@ export default function WorkoutForm() {
     try {
       const started_at = new Date(`${date}T${time}:00`);
 
-      const { data: w, error: werr } = await supabase
-        .from("workouts")
-        .insert({
-          title,
-          notes,
-          started_at,
-          muscle_groups: muscles,
-        })
-        .select()
-        .single();
-      if (werr) throw werr;
-
-      const setsPayload = rows.map((r, order) => ({
-        workout_id: w.id,
-        exercise: r.exercise || "Exercise",
-        set_order: order + 1,
-        sets: r.sets,
-        reps: r.reps,
-        weight: r.weight,
+      // Build sets JSON expected by `public.workouts.sets` (jsonb)
+      // Each row represents an exercise with N identical sets
+      const setsJson = rows.map((r) => ({
+        name: r.exercise || "Exercise",
+        sets: Array.from({ length: Math.max(1, Number(r.sets) || 1) }, () => ({
+          reps: Number(r.reps) || 0,
+          weight_kg: Number(r.weight) || 0,
+        })),
       }));
-      const { error: serr } = await supabase.from("workout_sets").insert(setsPayload);
-      if (serr) throw serr;
+
+      // Compute total volume as sum(reps * weight) across all sets
+      const volume = setsJson.reduce(
+        (sum, blk) =>
+          sum + blk.sets.reduce((s, set) => s + (Number(set.reps || 0) * Number(set.weight_kg || 0)), 0),
+        0,
+      );
+
+      const dayLabel = (() => {
+        try {
+          return started_at.toLocaleDateString(undefined, { weekday: "long" });
+        } catch {
+          return "";
+        }
+      })();
+
+      const payload: any = {
+        name: title || "Training Session",
+        day: dayLabel || "",
+        sets: setsJson,
+        volume,
+        started_at: started_at.toISOString(),
+        notes: notes || null,
+        muscle_groups: muscles, // text[]
+        // Use first selected muscle as split/training label if any
+        split_name: muscles[0] || null,
+        training_day: muscles[0] || null,
+      };
+
+      const { error: werr } = await supabase.from("workouts").insert(payload);
+      if (werr) throw werr;
 
       setMessage("Workout saved");
     } catch (err: any) {
@@ -207,6 +225,7 @@ export default function WorkoutForm() {
             Add exercise
           </Button>
 
+          {/* Notes field is currently not persisted server-side; keeping UI for user context only */}
           <label className="flex flex-col gap-2">
             <span className="text-sm text-white/80">Notes</span>
             <textarea

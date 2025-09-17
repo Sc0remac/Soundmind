@@ -62,7 +62,7 @@ export default function NavBar() {
         <Link href="/" className="font-semibold">Soundmind</Link>
 
         <div className="flex items-center gap-4">
-          <Link href="/log-workout">Log Workout</Link>
+          <Link href="/workout/new">Log Workout</Link>
           <Link href="/mood/new">Log Mood</Link>
           <Link href="/timeline">Timeline</Link>
           <Link href="/insights">Insights</Link>

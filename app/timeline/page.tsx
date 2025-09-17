@@ -569,7 +569,7 @@ function TimelineInner() {
         </div>
         <div className="flex items-center gap-1">
           <Button as={Link} href="/mood/new" size="sm" color="success" variant="flat" startContent={<Plus className="size-4" />}>Mood</Button>
-          <Button as={Link} href="/log-workout" size="sm" color="primary" variant="flat" startContent={<Plus className="size-4" />}>Workout</Button>
+          <Button as={Link} href="/workout/new" size="sm" color="primary" variant="flat" startContent={<Plus className="size-4" />}>Workout</Button>
         </div>
       </div>
 
@@ -581,7 +581,7 @@ function TimelineInner() {
           <div className="mb-3 text-base font-medium">No data in range</div>
           <div className="flex flex-wrap items-center gap-2">
             <Button as={Link} href="/mood/new" size="sm" variant="flat">+ Mood</Button>
-            <Button as={Link} href="/log-workout" size="sm" variant="flat">+ Workout</Button>
+            <Button as={Link} href="/workout/new" size="sm" variant="flat">+ Workout</Button>
             {connectedSpotify === false && (
               <Button as={Link} href="/music" size="sm" variant="flat">Connect Spotify</Button>
             )}

@@ -20,7 +20,7 @@ import {
 } from "lucide-react";
 
 const items = [
-  { href: "/log-workout", label: "Log Workout", icon: NotebookPen },
+  { href: "/workout/new", label: "Log Workout", icon: NotebookPen },
   { href: "/mood/new", label: "Log Mood", icon: SmilePlus },
   { href: "/timeline", label: "Timeline", icon: CalendarClock },
   { href: "/music", label: "Music", icon: Music2 },
@@ -74,4 +74,3 @@ export default function BrandNav() {
     </Navbar>
   );
 }
-
